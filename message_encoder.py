@@ -4,6 +4,8 @@ from torch_geometric.utils import scatter
 from utils import filter_by_index
 import pytorch_lightning as pl
 import torch
+from dataclasses import dataclass
+from collections import OrderedDict
 
 
 class MessageTransformer(nn.Module):
@@ -38,17 +40,19 @@ class MessageTransformer(nn.Module):
         self.attn_weight = None
 
     def forward(self, src, dst):
-        # align dimensions
-        src = self.src_norm(self.src_linear(src))
-        dst = self.dst_norm(self.dst_linear(dst))
+        # norm and align
+        src = self.src_linear(self.src_norm(src))
+        dst = self.dst_linear(self.dst_norm(dst))
+
+        # Determine whether to compute attention weights based on the mode
+        need_weights = not self.training  # True if in eval mode, False if in training mode
 
         # Use src as both key and value in the attention mechanism
-        x, self.attn_weight = self.attn(query=dst.unsqueeze(0), key=src.unsqueeze(0), value=src.unsqueeze(0),
-                                        is_causal=False, attn_mask=None
-                                        )
-        x = x.squeeze(0)  # Remove the batch dimension added for multi-head attention
-        x = self.layer_norm(x)
-        x = x + self.mlp(x)
+        attn_out, self.attn_weight = self.attn(query=dst.unsqueeze(0), key=src.unsqueeze(0), value=src.unsqueeze(0),
+                                               is_causal=False, attn_mask=None, need_weights=need_weights
+                                               )
+        x = dst + attn_out.squeeze(0)  # Remove the batch dimension added for multi-head attention
+        x = x + self.mlp(self.layer_norm(x))
 
         return x
 
@@ -78,16 +82,16 @@ class MessageEncoder(pl.LightningModule):
         self.action_norm = nn.LayerNorm(emb_dim)
         self.entity_norm = nn.LayerNorm(emb_dim)
 
-        self.node_norms = torch.nn.ModuleList([nn.BatchNorm1d(d) for d in node_dims])
+        self.node_norms = nn.ModuleList([nn.BatchNorm1d(d) for d in node_dims])
+        self.edge_norms = nn.ModuleList([nn.BatchNorm1d(d) for d in edge_dims])
 
-        self.edge_norms = torch.nn.ModuleList([nn.BatchNorm1d(d) for d in edge_dims])
-
-        self.edge_encoders = torch.nn.ModuleList([MessageTransformer(emb_dim=emb_dim,
-                                                                     bias=bias,
-                                                                     dropout=dropout,
-                                                                     n_head=n_head,
-                                                                     expansion_factor=mlp_expansion_factor)
-                                                  for _ in edge_dims])
+        # one encoder per edge
+        self.edge_encoders = nn.ModuleList([MessageTransformer(emb_dim=emb_dim,
+                                                               bias=bias,
+                                                               dropout=dropout,
+                                                               n_head=n_head,
+                                                               expansion_factor=mlp_expansion_factor)
+                                            for _ in edge_dims])
 
     def forward(self,
                 entity_types: Tensor,
@@ -105,11 +109,12 @@ class MessageEncoder(pl.LightningModule):
         """
         :param action_types: Tensor of int ids for action codes
         :param entity_types: Tensor of int ids for entity codes
+
         :param src_node_types: list of ints indicating node type
         :param src_features: list of ragged tensors dependent on src node type
 
         :param edge_types: list of ints indicating edge type
-        :param edge_features: tensor of ints indicating edge type
+        :param edge_features: ragged tensors dependent on edge type
 
         :param dst_node_types: list of ints indicating node type
         :param dst_features: list of ragged tensors dependent on dst node type
@@ -121,8 +126,8 @@ class MessageEncoder(pl.LightningModule):
         action_emb = self.action_emb_layer(action_types)
 
         # concat all node data to normalize at once
-        concat_node_features = [('src', i, src) for i, src in enumerate(src_features)] + [('dst', j, dst) for j, dst in
-                                                                                          enumerate(dst_features)]
+        concat_node_features = [('src', i, src) for i, src in enumerate(src_features)] + \
+                               [('dst', j, dst) for j, dst in enumerate(dst_features)]
         concat_node_types = src_node_types + dst_node_types
 
         norm_src_features = {}
@@ -142,6 +147,8 @@ class MessageEncoder(pl.LightningModule):
                             norm_src_features[idx] = feat
                         case 'dst':
                             norm_dst_features[idx] = feat
+                        case _:
+                            raise ValueError(f'Invalid direction of {node_dir}')
 
         # norm edge features by types
         norm_edge_feature_dict = {}
@@ -157,23 +164,24 @@ class MessageEncoder(pl.LightningModule):
 
         # align features before encoding
         message_dict = {}
-        for i, edge_type in enumerate(zip(src_node_types, edge_types, dst_node_types)):
+        for i, edge_name in enumerate(zip(src_node_types, edge_types, dst_node_types)):
+            # edge_name format is (src node type, edge type, dst node type)
             features = norm_src_features[i], norm_edge_feature_dict[i], norm_dst_features[i]
-            if edge_type not in message_dict:
-                message_dict[edge_type] = {i: features}
+            if edge_name not in message_dict:
+                message_dict[edge_name] = {i: features}
             else:
-                message_dict[edge_type][i] = features
+                message_dict[edge_name][i] = features
 
         # final message encoding
         messages = torch.zeros(len(src_features), self.emb_dim)
-        for k, feature_dict in message_dict.items():
+        for edge_name, feature_dict in message_dict.items():
+            # edge_name format is (src node type, edge type, dst node type)
             idx = torch.tensor(list(feature_dict.keys()))
             src_f = torch.stack([i[0] for i in feature_dict.values()])
             edge_f = torch.stack([i[1] for i in feature_dict.values()])
             dst_f = torch.stack([i[2] for i in feature_dict.values()])
             concat_src = torch.cat([src_f, edge_f, entity_emb[idx], action_emb[idx]], dim=1)
-
-            messages[idx] = self.edge_encoders[k[1]](src=concat_src, dst=dst_f)
+            messages[idx] = self.edge_encoders[edge_name[1]](src=concat_src, dst=dst_f)
 
         return messages
 
