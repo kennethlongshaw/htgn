@@ -3,9 +3,7 @@ from torch import Tensor
 from torch_geometric.utils import scatter
 from utils import filter_by_index
 import pytorch_lightning as pl
-
 import torch
-
 
 
 class MessageTransformer(nn.Module):
@@ -38,6 +36,7 @@ class MessageTransformer(nn.Module):
         self.attn_weight = None
 
     def forward(self, src, dst):
+        # align dimensions
         src = self.src_linear(src)
         dst = self.dst_linear(dst)
 
@@ -45,7 +44,7 @@ class MessageTransformer(nn.Module):
         x, self.attn_weight = self.attn(query=dst.unsqueeze(0), key=src.unsqueeze(0), value=src.unsqueeze(0),
                                         is_causal=False, attn_mask=None
                                         )
-        x = x.squeeze(0)  # Remove the batch dimension added for multihead attention
+        x = x.squeeze(0)  # Remove the batch dimension added for multi-head attention
         x = self.layer_norm(x)
         x = x + self.mlp(x)
 
@@ -67,10 +66,10 @@ class MessageEncoder(pl.LightningModule):
         self.dropout = dropout
         self.emb_dim = emb_dim
 
-        # entities are NODE, and EDGE
+        # entities are 0 NODE, and 1 EDGE
         self.entity_emb_layer = nn.Embedding(num_embeddings=2, embedding_dim=emb_dim)
 
-        # actions are CREATE, UPDATE, DELETE
+        # actions are 0 CREATE, 1 UPDATE, 2 DELETE
         self.action_emb_layer = nn.Embedding(num_embeddings=3, embedding_dim=emb_dim)
 
         # norms
@@ -102,8 +101,8 @@ class MessageEncoder(pl.LightningModule):
                 dst_features: list[Tensor],
                 ):
         """
-        :param action_types:
-        :param entity_types:
+        :param action_types: Tensor of int ids for action codes
+        :param entity_types: Tensor of int ids for entity codes
         :param src_node_types: list of ints indicating node type
         :param src_features: list of ragged tensors dependent on src node type
 
@@ -114,7 +113,8 @@ class MessageEncoder(pl.LightningModule):
         :param dst_features: list of ragged tensors dependent on dst node type
         :return:
         """
-        #Learning Embedding
+        
+        # Learning Embedding
         entity_emb = self.entity_emb_layer(entity_types)
         action_emb = self.action_emb_layer(action_types)
 
@@ -126,7 +126,7 @@ class MessageEncoder(pl.LightningModule):
         norm_src_features = {}
         norm_dst_features = {}
 
-        # norm node features
+        # norm node features by types
         for type_id, _ in enumerate(self.node_norms):
             type_data = filter_by_index(concat_node_features, concat_node_types, type_id)
             if len(type_data) > 0:
@@ -141,7 +141,7 @@ class MessageEncoder(pl.LightningModule):
                         case 'dst':
                             norm_dst_features[idx] = feat
 
-        # norm edge features
+        # norm edge features by types
         norm_edge_feature_dict = {}
         edge_features = [(i, f) for i, f in enumerate(edge_features)]
         for type_id, _ in enumerate(self.edge_norms):

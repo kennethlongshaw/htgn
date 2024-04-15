@@ -3,7 +3,7 @@ from torch_geometric.nn.models.basic_gnn import BasicGNN
 from torch_geometric.nn.conv import MessagePassing
 from typing import Union, Tuple, Final
 from torch import Tensor
-from torch_geometric.typing import OptTensor
+from torch_geometric.typing import OptTensor, Adj
 import torch.nn.functional as F
 
 from typing import Optional, Callable, Any
@@ -12,9 +12,27 @@ from dataclasses import dataclass
 
 class FlashTransformerConv(geo.nn.TransformerConv):
     """
-        Implements the scaled dot product attention function in torch that can utilize flash attention or whatever
-        most efficient implementation is available
+        Implements the scaled dot product attention function in torch that can utilize flash attention v2 or the most
+        efficient implementation that is available on the machine
+
+        Should produce the same output on stock `torch_geometric.nn.TransformerConv` but faster on modern GPUs
     """
+
+    def __init__(
+        self,
+        in_channels: Union[int, Tuple[int, int]],
+        out_channels: int,
+        heads: int = 1,
+        concat: bool = True,
+        beta: bool = False,
+        dropout: float = 0.,
+        edge_dim: Optional[int] = None,
+        bias: bool = True,
+        root_weight: bool = True,
+        **kwargs,
+    ):
+        super().__init__(in_channels, out_channels, heads=heads, concat=concat, beta=beta,
+                         dropout=dropout, edge_dim=edge_dim, bias=bias, root_weight=root_weight, **kwargs)
 
     def message(self, query_i: Tensor, key_j: Tensor, value_j: Tensor,
                 edge_attr: OptTensor, index: Tensor, ptr: OptTensor,
@@ -33,6 +51,7 @@ class FlashTransformerConv(geo.nn.TransformerConv):
         self._alpha = alpha.view(-1, self.heads)
 
         return attn_output
+
 
 @dataclass
 class GraphTransformerConfig:
@@ -55,11 +74,17 @@ class GraphTransformerConfig:
 
 
 class GraphTransformerModel(BasicGNN):
+    """
+        Mirrors the way torch geometric creates models that only vary by their convolution choice
+        Creates torch geometric model that uses our Flash Attention transformer convolution
+    """
+
     supports_edge_weight: Final[bool] = False
     supports_edge_attr: Final[bool] = True
     supports_norm_batch: Final[bool]
 
-    def init_conv(self, in_channels: Union[int, Tuple[int, int]],
+    def init_conv(self,
+                  in_channels: Union[int, Tuple[int, int]],
                   out_channels: int,
                   **kwargs) -> MessagePassing:
 
@@ -83,12 +108,13 @@ class GraphTransformerModel(BasicGNN):
         if concat:
             out_channels = out_channels // heads
 
-        return geo.nn.TransformerConv(in_channels=in_channels,
-                                      out_channels=out_channels,
-                                      heads=heads,
-                                      concat=concat,
-                                      edge_dim=edge_dim,
-                                      beta=beta,
-                                      bias=bias,
-                                      root_weight=root_weight,
-                                      dropout=self.dropout.p, **kwargs)
+        return FlashTransformerConv(in_channels=in_channels,
+                                    out_channels=out_channels,
+                                    heads=heads,
+                                    concat=concat,
+                                    edge_dim=edge_dim,
+                                    beta=beta,
+                                    bias=bias,
+                                    root_weight=root_weight,
+                                    dropout=self.dropout.p,
+                                    **kwargs)
