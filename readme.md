@@ -1,10 +1,16 @@
 # HTGN: Hetero Temporal Graph Neural Network
 
-This project seeks to implement a heterogeneous version of the TGN model. In addition to handling heterogeneity, the GRU cell of the original TGN is replaced with Mamba and the graph attention convolution used by TGN has been upgraded to use Flash Attention.
+This project seeks to implement a heterogeneous version of the TGN model. In addition to handling heterogeneity, the GRU
+cell of the original TGN is replaced with Mamba and the graph attention convolution used by TGN has been upgraded to use 
+Flash Attention.
 This should produce a model architecture capable of the following:
-* Handle heterogeneous data models like those found in real world data warehouses with full expression of node/edge create, update, or delete transactions
+* Handle heterogeneous data models like those found in real world data warehouses with full expression of node/edge 
+create, update, or delete transactions
+* Only process change records in order to support real-time streaming use cases. No need to process an entire graph 
+snapshot at every time step
 * Track much longer temporal patterns of the graph thanks to the Mamba architecture
 * Faster calculation of Transformer GNN while still being able to utilize attention-driven explanations of GNN results
+thanks to GPU optimizations
 
 Experiments on replacing the Transformer GNN with a Co-operative GNN are also being considered
 
@@ -20,10 +26,10 @@ aggregate messages into the destination node. Think of this as one round of part
 ### Model Process
 1. `Data Loader` loads batches of new messages and creates additional messages for supporting maintenance, such as 
 creating edge deletes for a node when the node is deleted. 
-2. `Graph Store` holds all edges that have been loaded so far and is used to calculate `degree` or any other additional 
-features.
-3. `Feature Store` holds the current state of node features. Messages are enriched with the current features of a node 
-to provide full context.
+2. `Graph Store` holds all edges that have been loaded so far and is used to incrementally calculate `degree` or any 
+other additional graph features.
+3. `Feature Store` holds the current state of node features. Messages are enriched with the current features of a source 
+or target node to provide full context.
 4.  Heterogeneous messages are encoded into a homogenous embedding space via `MessageEncoder`.
 5.  Messages are aggregated for the batch by destination node ID via `Node Aggregator`.
 6.  `Mamba Block` uses the aggregated messages and the destination node's previous state to calculate a new node 
