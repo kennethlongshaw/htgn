@@ -20,6 +20,8 @@ class MessageTransformer(nn.Module):
         super().__init__()
         self.src_linear = nn.LazyLinear(emb_dim)
         self.dst_linear = nn.LazyLinear(emb_dim)
+        self.src_norm = nn.LayerNorm(emb_dim)
+        self.dst_norm = nn.LayerNorm(emb_dim)
         self.attn = nn.MultiheadAttention(num_heads=n_head,
                                           embed_dim=emb_dim,
                                           bias=bias,
@@ -37,8 +39,8 @@ class MessageTransformer(nn.Module):
 
     def forward(self, src, dst):
         # align dimensions
-        src = self.src_linear(src)
-        dst = self.dst_linear(dst)
+        src = self.src_norm(self.src_linear(src))
+        dst = self.dst_norm(self.dst_linear(dst))
 
         # Use src as both key and value in the attention mechanism
         x, self.attn_weight = self.attn(query=dst.unsqueeze(0), key=src.unsqueeze(0), value=src.unsqueeze(0),
@@ -113,7 +115,7 @@ class MessageEncoder(pl.LightningModule):
         :param dst_features: list of ragged tensors dependent on dst node type
         :return:
         """
-        
+
         # Learning Embedding
         entity_emb = self.entity_emb_layer(entity_types)
         action_emb = self.action_emb_layer(action_types)
