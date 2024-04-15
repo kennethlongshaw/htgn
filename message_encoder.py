@@ -18,10 +18,10 @@ class MessageTransformer(nn.Module):
                  n_head: int = 1,
                  expansion_factor: int = 2):
         super().__init__()
-        self.src_linear = nn.LazyLinear(emb_dim)
-        self.dst_linear = nn.LazyLinear(emb_dim)
-        self.src_norm = nn.LayerNorm(emb_dim)
-        self.dst_norm = nn.LayerNorm(emb_dim)
+        self.src_linear = nn.LazyLinear(emb_dim, bias=bias)
+        self.dst_linear = nn.LazyLinear(emb_dim, bias=bias)
+        self.src_norm = nn.LayerNorm(emb_dim, bias=bias)
+        self.dst_norm = nn.LayerNorm(emb_dim, bias=bias)
         self.attn = nn.MultiheadAttention(num_heads=n_head,
                                           embed_dim=emb_dim,
                                           bias=bias,
