@@ -55,12 +55,13 @@ class FlashTransformerConv(geo.nn.TransformerConv):
 
 @dataclass
 class GraphTransformerConfig:
-    in_channels: int | tuple
+    in_channels: Union[int, Tuple[int, int]]
     hidden_channels: int
     num_layers: int
     heads: int = 1
-    concat: bool = False
-    beta: bool = True
+    concat: bool = True
+    edge_dim: int = None
+    beta: bool = False
     bias: bool = True
     root_weight: bool = True
     out_channels: Optional[int] = None
@@ -89,9 +90,9 @@ class GraphTransformerModel(BasicGNN):
                   **kwargs) -> MessagePassing:
 
         heads = kwargs.pop('heads', 1)
-        concat = kwargs.pop('concat', False)
+        concat = kwargs.pop('concat', True)
         edge_dim = kwargs.pop('edge_dim', None)
-        beta = kwargs.pop('beta', True)
+        beta = kwargs.pop('beta', False)
         bias = kwargs.pop('bias', True)
         root_weight = kwargs.pop('root_weight', True)
 

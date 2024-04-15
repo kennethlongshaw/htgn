@@ -51,6 +51,13 @@ All messages are communicated as edges. Self-Loop edges are used for node creati
 
 
 ### Notes
-* **Directed vs Undirected**: HTGN is inherently directional. For undirected graphs, messages can be duplicated with directions reversed
-* **Node Messages** - Because all messages must contain an edge, Self-Loop edges are used for node creation, updates, or deletions
-* **Soft vs Hard Deletes** - Some graphs may benefit from processing delete messages but not actually removing the nodes/edges from the graph. For example, if a malicious user account was deleted, it may still be beneficial to preserve the user's relationships and data in the graph. Because of this, soft deletes are provided as an option. With hard deletes, the node/edge data will not be consumed at inference time. With soft deletes, delete messages are still processed and available at inference time. It still expected that a deleted edge/node will not see updates in the future.
+* **Directed vs Undirected**: HTGN is inherently directional. For undirected graphs, messages can be duplicated with 
+directions reversed
+* **Node Messages** - Because all messages must contain an edge, Self-Loop edges are used for node creation, updates, or
+deletions
+* **Soft vs Hard Deletes** - Some graphs may benefit from processing delete messages but not actually removing the nodes
+/edges from the graph. For example, if a malicious user account was deleted, it may still be beneficial to preserve the 
+user's relationships and data in the graph to find other malicious users. Because of this, soft deletes are provided as 
+an option. With hard deletes, the node/edge data will not be consumed at inference time. With soft deletes, delete 
+messages are still processed and available at inference time. It is still expected that a deleted edge/node will not see
+updates in the future.
