@@ -1,1 +1,6 @@
 /venv
+.idea/
+__pycache__/
+main.py
+synthetic_data.py
+tests.py

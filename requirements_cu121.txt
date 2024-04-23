@@ -1,5 +1,7 @@
 torch_geometric
 pytorch_lightning
+causal-conv1d>=1.2.0
+mamba-ssm
 --find-links https://download.pytorch.org/whl/cu121
 torch<2.3.0
 --find-links https://data.pyg.org/whl/torch-2.2.0+cu121.html

@@ -1,3 +1,4 @@
+import torch.nn
 import torch_geometric as geo
 from torch_geometric.nn.models.basic_gnn import BasicGNN
 from torch_geometric.nn.conv import MessagePassing
@@ -19,17 +20,17 @@ class FlashTransformerConv(geo.nn.TransformerConv):
     """
 
     def __init__(
-        self,
-        in_channels: Union[int, Tuple[int, int]],
-        out_channels: int,
-        heads: int = 1,
-        concat: bool = True,
-        beta: bool = False,
-        dropout: float = 0.,
-        edge_dim: Optional[int] = None,
-        bias: bool = True,
-        root_weight: bool = True,
-        **kwargs,
+            self,
+            in_channels: Union[int, Tuple[int, int]],
+            out_channels: int,
+            heads: int = 1,
+            concat: bool = True,
+            beta: bool = False,
+            dropout: float = 0.,
+            edge_dim: Optional[int] = None,
+            bias: bool = True,
+            root_weight: bool = True,
+            **kwargs,
     ):
         super().__init__(in_channels, out_channels, heads=heads, concat=concat, beta=beta,
                          dropout=dropout, edge_dim=edge_dim, bias=bias, root_weight=root_weight, **kwargs)
@@ -43,12 +44,13 @@ class FlashTransformerConv(geo.nn.TransformerConv):
             key_j = key_j + edge_attr
             value_j = value_j + edge_attr
 
-        attn_output, alpha = F.scaled_dot_product_attention(
+        attn_output = F.scaled_dot_product_attention(
             query=query_i, key=key_j, value=value_j,
-            attn_mask=None, dropout_p=self.dropout, is_causal=False
+            attn_mask=None, dropout_p=self.dropout, is_causal=False,
         )
 
-        self._alpha = alpha.view(-1, self.heads)
+        # TODO: need to figure out weights, they can return with MHA but not SDPA
+        #self._alpha = alpha.view(-1, self.heads)
 
         return attn_output
 

@@ -189,3 +189,61 @@ class MessageEncoder(pl.LightningModule):
 class SumAggregator(torch.nn.Module):
     def forward(self, msg: Tensor, index: Tensor, t: Tensor, dim_size: int):
         return scatter(msg, index, dim=0, dim_size=dim_size, reduce='sum')
+
+
+class ExampleMessageTransformer(nn.Module):
+    """
+        Implements a transformer block for message cross attention in order to aggregate messages to their destination
+    """
+
+    def __init__(self,
+                 emb_dim: int,
+                 memory_dim: int,
+                 msg_dim: int,
+                 time_dim: int,
+                 bias: bool = True,
+                 dropout: float = 0.2,
+                 n_head: int = 1,
+                 expansion_factor: int = 2,
+                 ):
+        super().__init__()
+        self.src_linear = nn.Linear(memory_dim, emb_dim, bias=bias)
+        self.msg_linear = nn.Linear(msg_dim, emb_dim, bias=bias)
+        self.dst_linear = nn.Linear(memory_dim, emb_dim, bias=bias)
+
+        self.src_norm = nn.LayerNorm(memory_dim, bias=bias)
+        self.msg_norm = nn.LayerNorm(msg_dim, bias=bias)
+        self.dst_norm = nn.LayerNorm(memory_dim, bias=bias)
+
+        self.attn = nn.MultiheadAttention(num_heads=n_head,
+                                          embed_dim=emb_dim,
+                                          bias=bias,
+                                          dropout=dropout
+                                          )
+        self.layer_norm = nn.LayerNorm(emb_dim, bias=bias)
+        self.mlp = nn.Sequential(
+            nn.Linear(emb_dim, emb_dim * expansion_factor, bias=bias),
+            nn.ReLU(),
+            nn.Linear(emb_dim * expansion_factor, emb_dim, bias=bias),
+            nn.Dropout(dropout)
+        )
+
+        self.attn_weight = None
+        self.out_channels = emb_dim + time_dim
+
+    def forward(self, src, dst, msg, t_enc):
+        # norm and align
+        src = self.src_linear(self.src_norm(src)) + self.msg_linear(self.msg_norm(msg))
+        dst = self.dst_linear(self.dst_norm(dst))
+
+        # Determine whether to compute attention weights based on the mode
+        #need_weights = not self.training  # True if in eval mode, False if in training mode
+
+        # Use src as both key and value in the attention mechanism
+        attn_out, self.attn_weight = self.attn(query=dst.unsqueeze(0), key=src.unsqueeze(0), value=src.unsqueeze(0),
+                                               is_causal=False, attn_mask=None
+                                               )
+        x = dst + attn_out.squeeze(0)  # Remove the batch dimension added for multi-head attention
+        x = x + self.mlp(self.layer_norm(x))
+
+        return torch.cat([x, t_enc], dim=-1)
