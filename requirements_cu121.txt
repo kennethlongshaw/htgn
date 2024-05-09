@@ -1,5 +1,7 @@
 torch_geometric
 pytorch_lightning
+kuzu
+pyarrow
 causal-conv1d>=1.2.0
 mamba-ssm
 --find-links https://download.pytorch.org/whl/cu121

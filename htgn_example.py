@@ -4,15 +4,14 @@ from tqdm import tqdm
 import torch
 from sklearn.metrics import average_precision_score, roc_auc_score
 from torch.nn import Linear
-
+from modified_tgn import AttentionTGN
 from torch_geometric.datasets import JODIEDataset
 from torch_geometric.loader import TemporalDataLoader
 from torch_geometric.nn import TGNMemory, TransformerConv
 from torch_geometric.nn.models.tgn import (
     LastNeighborLoader,
 )
-from message_encoder import ExampleMessageTransformer, SumAggregator
-from graph_transformer import FlashTransformerConv
+from message_encoder import ExampleMessageTransformer, SumAggregator, MLPMessageEncoder, GraphAttention
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -54,7 +53,7 @@ class GraphAttentionEmbedding(torch.nn.Module):
         super().__init__()
         self.time_enc = time_enc
         edge_dim = msg_dim + time_enc.out_channels
-        self.conv = FlashTransformerConv(in_channels, out_channels // 2, heads=2,
+        self.conv = TransformerConv(in_channels, out_channels // 2, heads=2,
                                     dropout=0.1, edge_dim=edge_dim)
 
     def forward(self, x, last_update, edge_index, t, msg):
@@ -87,11 +86,12 @@ memory = TGNMemory(
     raw_msg_dim=msg_size,
     memory_dim=memory_dim,
     time_dim=time_dim,
-    message_module=ExampleMessageTransformer(emb_dim=embedding_dim,
-                                             msg_dim=msg_size,
-                                             memory_dim=memory_dim,
-                                             time_dim=time_dim),
-    aggregator_module=SumAggregator(),
+    message_module=GraphAttention(msg_dim=msg_size,
+                                  memory_dim=memory_dim,
+                                  time_dim=time_dim,
+                                  bias=False
+                                  ),
+    aggregator_module=SumAggregator()
 ).to(device)
 
 gnn = GraphAttentionEmbedding(
@@ -103,7 +103,6 @@ gnn = GraphAttentionEmbedding(
 
 link_pred = LinkPredictor(in_channels=embedding_dim).to(device)
 
-
 optimizer = torch.optim.Adam(
     set(memory.parameters()) | set(gnn.parameters())
     | set(link_pred.parameters()), lr=0.0001)
@@ -111,8 +110,6 @@ criterion = torch.nn.BCEWithLogitsLoss()
 
 # Helper vector to map global node indices to local ones.
 assoc = torch.empty(data.num_nodes, dtype=torch.long, device=device)
-
-node_cnt = torch.concat([data.src, data.dst]).unique().shape[0]
 
 
 def train(add_degrees=False):
@@ -123,7 +120,7 @@ def train(add_degrees=False):
     memory.reset_state()  # Start with a fresh memory.
     neighbor_loader.reset_state()  # Start with an empty graph.
 
-    train_degrees = torch.zeros(node_cnt).to(device)
+    train_degrees = torch.zeros(data.num_nodes).to(device)
 
     total_loss = 0
     for batch in train_loader:
