@@ -1,16 +1,3 @@
-# This code achieves a performance of around 96.60%. However, it is not
-# directly comparable to the results reported by the TGN paper since a
-# slightly different evaluation setup is used here.
-# In particular, predictions in the same batch are made in parallel, i.e.
-# predictions for interactions later in the batch have no access to any
-# information whatsoever about previous interactions in the same batch.
-# On the contrary, when sampling node neighborhoods for interactions later in
-# the batch, the TGN paper code has access to previous interactions in the
-# batch.
-# While both approaches are correct, together with the authors of the paper we
-# decided to present this version here as it is more realsitic and a better
-# test bed for future methods.
-
 import set_determinism
 import os.path as osp
 
@@ -18,16 +5,17 @@ from tqdm import tqdm
 import torch
 from sklearn.metrics import average_precision_score, roc_auc_score
 from torch.nn import Linear
+from torch import Tensor
 
 from torch_geometric.datasets import JODIEDataset
 from torch_geometric.loader import TemporalDataLoader
-from torch_geometric.nn import TGNMemory, TransformerConv
+from torch_geometric.nn import TransformerConv
+from modified_tgn import TGNMessageStoreType, TGNMemory
 from torch_geometric.nn.models.tgn import (
     IdentityMessage,
     LastAggregator,
     LastNeighborLoader,
 )
-
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -92,10 +80,9 @@ class LinkPredictor(torch.nn.Module):
 memory_dim = time_dim = embedding_dim = 100
 
 memory = TGNMemory(
-    data.num_nodes,
-    data.msg.size(-1),
-    memory_dim,
-    time_dim,
+    num_nodes=data.num_nodes,
+    memory_dim=memory_dim,
+    time_dim=time_dim,
     message_module=IdentityMessage(data.msg.size(-1), memory_dim, time_dim),
     aggregator_module=LastAggregator(),
 ).to(device)
@@ -114,16 +101,24 @@ optimizer = torch.optim.Adam(
     | set(link_pred.parameters()), lr=0.0001)
 criterion = torch.nn.BCEWithLogitsLoss()
 
-# Helper vector to map global node indices to local ones.
-assoc = torch.empty(data.num_nodes, dtype=torch.long, device=device)
+
+def update_msg_store(src: Tensor, dst: Tensor, t: Tensor,
+                     raw_msg: Tensor, msg_store: TGNMessageStoreType):
+    n_id, perm = src.sort()
+    n_id, count = n_id.unique_consecutive(return_counts=True)
+    for i, idx in zip(n_id.tolist(), perm.split(count.tolist())):
+        msg_store[i] = (src[idx], dst[idx], t[idx], raw_msg[idx])
+    return msg_store
 
 
 def train():
+    msg_s_store = {}
+    msg_d_store = {}
+
     memory.train()
     gnn.train()
     link_pred.train()
 
-    memory.reset_state()  # Start with a fresh memory.
     neighbor_loader.reset_state()  # Start with an empty graph.
 
     total_loss = 0
@@ -132,11 +127,22 @@ def train():
         optimizer.zero_grad()
         batch = batch.to(device)
 
-        n_id, edge_index, e_id = neighbor_loader(batch.n_id)
-        assoc[n_id] = torch.arange(n_id.size(0), device=device)
+        neighbor_ids, edge_index, e_id = neighbor_loader(batch.n_id)
+        assoc[neighbor_ids] = torch.arange(neighbor_ids.size(0), device=device)
+
+        neighbor_src_msg_records = [msg_s_store.get(i) for i in neighbor_ids.tolist()]
+        neighbor_dst_msg_records = [msg_d_store.get(i) for i in neighbor_ids.tolist()]
+
+        neighbor_prev_memory = mem_store[neighbor_ids]
 
         # Get updated memory of all nodes involved in the computation.
-        z, last_update = memory(n_id)
+        z, last_update, assoc = memory(n_id=neighbor_ids,
+                                       src_msg_records=neighbor_src_msg_records,
+                                       dst_msg_records=neighbor_dst_msg_records,
+                                       last_update=last_update_store,
+                                       assoc=assoc,
+                                       nid_prev_memory=neighbor_prev_memory
+                                       )
 
         # operates on graph of memories as nodes
         # encoded time since update and original message as edge features
@@ -153,14 +159,36 @@ def train():
         loss = criterion(pos_out, torch.ones_like(pos_out))
         loss += criterion(neg_out, torch.zeros_like(neg_out))
 
-        # Update memory and neighbor loader with ground-truth state.
-        memory.update_state(batch.src, batch.dst, batch.t, batch.msg)
-        neighbor_loader.insert(batch.src, batch.dst)
+        src_msg_records = [msg_s_store[i] for i in batch.n_id.tolist()]
+        dst_msg_records = [msg_d_store[i] for i in batch.n_id.tolist()]
 
+        batch_prev_memory = mem_store[batch.n_id]
+
+        # update memory store
+        new_mem, new_last_update, assoc = memory(n_id=batch.n_id,
+                                                 src_msg_records=src_msg_records,
+                                                 dst_msg_records=dst_msg_records,
+                                                 last_update=last_update_store,
+                                                 assoc=assoc,
+                                                 nid_prev_memory=batch_prev_memory
+                                                 )
+        mem_store[batch.n_id] = new_mem
+        last_update_store[batch.n_id] = new_last_update
+
+        # update message store
+        msg_s_store = update_msg_store(batch.src, batch.dst, batch.t, batch.raw_msg, msg_s_store)
+        msg_d_store = update_msg_store(batch.dst, batch.src, batch.t, batch.raw_msg, msg_d_store)
+
+        # update neighbor loader with edges
+        neighbor_loader.insert(batch.src, batch.dst)
 
         loss.backward()
         optimizer.step()
-        memory.detach()
+
+        mem_store.detach()
+        last_update_store.detach()
+        assoc.detach()
+
         total_loss += float(loss) * batch.num_events
 
     return total_loss / train_data.num_events
@@ -199,8 +227,13 @@ def test(loader):
     return float(torch.tensor(aps).mean()), float(torch.tensor(aucs).mean())
 
 
-
 for epoch in tqdm(range(1, 51)):
+    # Helper vector to map global node indices to local ones.
+
+    assoc = torch.empty(data.num_nodes, dtype=torch.long, device=device)
+    mem_store = torch.empty(data.num_nodes, memory_dim).to(device)
+    last_update_store = torch.empty(data.num_nodes, dtype=torch.long).to(device)
+
     loss = train()
     print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}')
     val_ap, val_auc = test(val_loader)

@@ -91,7 +91,6 @@ class HeteroMessageEncoder(pl.LightningModule):
         self.node_norms = nn.ModuleList([nn.LayerNorm(d + emb_dim) for d in node_dims])
         self.edge_norms = nn.ModuleList([nn.LayerNorm(d + emb_dim) for d in edge_dims])
 
-        # todo: use edges to calculate expected src and dst dim
         # src_f including emb dim, edge_f including emb dim, entity_emb[idx], action_emb[idx]]
         encoder_dims = [(node_dims[e[0]] + edge_dims[e[1]] + emb_dim * 4,
                          node_dims[e[2]] + emb_dim)
@@ -148,6 +147,7 @@ class HeteroMessageEncoder(pl.LightningModule):
         norm_dst_features = {}
 
         # norm node features by types and organize into feature dicts
+        # this is a bit messy because we are operating on list of ragged tensors
         for type_id, _ in enumerate(self.node_norms):
             type_data = filter_by_index(concat_node_features, concat_node_types, type_id)
             if len(type_data) > 0:
@@ -155,11 +155,12 @@ class HeteroMessageEncoder(pl.LightningModule):
                 og_index = [f[1] for f in type_data]
                 type_features = torch.stack([f[2] for f in type_data])
                 node_type_emb = self.node_emb_layers(torch.tensor(type_id)).repeat(type_features.shape[0], 1)
-                # sample first tensor to see if empty
+
                 if type_features.numel() > 0:
                     type_features = torch.cat([type_features, node_type_emb], dim=1)
                 else:
                     type_features = node_type_emb
+
                 node_norm_features = self.node_norms[type_id](type_features)
                 for node_dir, idx, feat in zip(direction, og_index, node_norm_features):
                     match node_dir:
@@ -171,6 +172,7 @@ class HeteroMessageEncoder(pl.LightningModule):
                             raise ValueError(f'Invalid direction of {node_dir}')
 
         # norm edge features by types and organize into feature dicts
+        # this is a bit messy because we are operating on list of ragged tensors
         norm_edge_feature_dict = {}
         edge_features = [(i, f) for i, f in enumerate(edge_features)]
         for type_id, _ in enumerate(self.edge_norms):

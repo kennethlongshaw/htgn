@@ -15,7 +15,12 @@ from message_encoder import ExampleMessageTransformer, SumAggregator, MLPMessage
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', 'JODIE')
+try:
+    filename = __file__
+except NameError:
+    filename = '__main__'
+
+path = osp.join(osp.dirname(osp.realpath(filename)), '..', 'data', 'JODIE')
 dataset = JODIEDataset(path, name='wikipedia')
 data = dataset[0]
 
@@ -127,25 +132,26 @@ def train(add_degrees=False):
         optimizer.zero_grad()
         batch = batch.to(device)
 
+        # get all nodes/edges related to node ids in batch
         n_id, edge_index, e_id = neighbor_loader(batch.n_id)
+
+        # map global ids to batch ids
         assoc[n_id] = torch.arange(n_id.size(0), device=device)
 
-        if add_degrees:
-            # added tracking for degree calc and state
-            degrees = torch.bincount(torch.cat([batch.src, batch.dst]))
-            padding = torch.zeros(train_degrees.shape[0] - degrees.shape[0], dtype=degrees.dtype).to(device)
-            train_degrees += torch.cat([degrees, padding])
-            src_degrees = train_degrees[batch.src].unsqueeze(1).detach()
-            dst_degrees = train_degrees[batch.dst].unsqueeze(1).detach()
-
-            batch_msg = torch.cat([batch.msg,
-                                   src_degrees,
-                                   dst_degrees
-                                   ], dim=1)
-        else:
-            batch_msg = batch.msg
-
-        # TODO: add tracking for common neighbors
+        # if add_degrees:
+        #     # added tracking for degree calc and state
+        #     degrees = torch.bincount(torch.cat([batch.src, batch.dst]))
+        #     padding = torch.zeros(train_degrees.shape[0] - degrees.shape[0], dtype=degrees.dtype).to(device)
+        #     train_degrees += torch.cat([degrees, padding])
+        #     src_degrees = train_degrees[batch.src].unsqueeze(1).detach()
+        #     dst_degrees = train_degrees[batch.dst].unsqueeze(1).detach()
+        #
+        #     batch_msg = torch.cat([batch.msg,
+        #                            src_degrees,
+        #                            dst_degrees
+        #                            ], dim=1)
+        # else:
+        #     batch_msg = batch.msg
 
         # Get updated memory of all nodes involved in the computation.
         z, last_update = memory(n_id)
@@ -158,7 +164,7 @@ def train(add_degrees=False):
         loss += criterion(neg_out, torch.zeros_like(neg_out))
 
         # Update memory and neighbor loader with ground-truth state.
-        memory.update_state(batch.src, batch.dst, batch.t, batch_msg)
+        memory.update_state(batch.src, batch.dst, batch.t, batch.msg)
         neighbor_loader.insert(batch.src, batch.dst)
 
         loss.backward()
@@ -182,28 +188,32 @@ def test(loader, add_degrees=False, degree_tensor: torch.Tensor = None):
 
         n_id, edge_index, e_id = neighbor_loader(batch.n_id)
         assoc[n_id] = torch.arange(n_id.size(0), device=device)
-
-        if add_degrees:
-
-            # added tracking for degree calc and state
-            degrees = torch.bincount(torch.cat([batch.src, batch.dst]))
-            padding = torch.zeros(test_degrees.shape[0] - degrees.shape[0], dtype=degrees.dtype).to(device)
-            test_degrees += torch.cat([degrees, padding])
-            src_degrees = test_degrees[batch.src].unsqueeze(1).detach()
-            dst_degrees = test_degrees[batch.dst].unsqueeze(1).detach()
-
-            batch_msg = torch.cat([batch.msg,
-                                   src_degrees,
-                                   dst_degrees
-                                   ], dim=1)
-        else:
-            batch_msg = batch.msg
+        #
+        # if add_degrees:
+        #
+        #     # added tracking for degree calc and state
+        #     degrees = torch.bincount(torch.cat([batch.src, batch.dst]))
+        #     padding = torch.zeros(test_degrees.shape[0] - degrees.shape[0], dtype=degrees.dtype).to(device)
+        #     test_degrees += torch.cat([degrees, padding])
+        #     src_degrees = test_degrees[batch.src].unsqueeze(1).detach()
+        #     dst_degrees = test_degrees[batch.dst].unsqueeze(1).detach()
+        #
+        #     batch_msg = torch.cat([batch.msg,
+        #                            src_degrees,
+        #                            dst_degrees
+        #                            ], dim=1)
+        # else:
+        #     batch_msg = batch.msg
 
         # TODO: add tracking for common neighbors
 
         z, last_update = memory(n_id)
-        z = gnn(z, last_update, edge_index, data.t[e_id].to(device),
-                data.msg[e_id].to(device))
+        z = gnn(x=z,
+                last_update=last_update,
+                edge_index=edge_index,
+                t=data.t[e_id].to(device),
+                msg=data.msg[e_id].to(device)
+                )
         pos_out = link_pred(z[assoc[batch.src]], z[assoc[batch.dst]])
         neg_out = link_pred(z[assoc[batch.src]], z[assoc[batch.neg_dst]])
 
@@ -215,7 +225,7 @@ def test(loader, add_degrees=False, degree_tensor: torch.Tensor = None):
         aps.append(average_precision_score(y_true, y_pred))
         aucs.append(roc_auc_score(y_true, y_pred))
 
-        memory.update_state(batch.src, batch.dst, batch.t, batch_msg)
+        memory.update_state(batch.src, batch.dst, batch.t, batch.msg)
         neighbor_loader.insert(batch.src, batch.dst)
     return float(torch.tensor(aps).mean()), float(torch.tensor(aucs).mean()), test_degrees
 
