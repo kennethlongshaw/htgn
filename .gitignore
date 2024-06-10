@@ -4,3 +4,6 @@ __pycache__/
 main.py
 synthetic_data.py
 tests.py
+/data
+/demo_db
+/test
