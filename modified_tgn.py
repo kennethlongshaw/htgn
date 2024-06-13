@@ -1,15 +1,12 @@
 from torch_geometric.nn.models import TGNMemory
 from torch_geometric.nn.models.tgn import TimeEncoder
-from message_encoder import AttentionMessageMemory
+from src.nn.encoders import AttentionMessageMemory
 import copy
 from typing import Callable, Dict, Tuple
 import torch
 from torch import Tensor
-from torch.nn import GRUCell, Linear
-from torch_geometric.nn.inits import zeros
+from torch.nn import GRUCell
 from torch_geometric.utils import scatter
-from torch_geometric.utils._scatter import scatter_argmax
-from kuzu_iterface import KuzuInterface
 
 
 class AttentionTGN(TGNMemory):

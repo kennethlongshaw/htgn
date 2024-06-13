@@ -1,4 +1,4 @@
-from message_encoder import HeteroMessageEncoder
+from src.nn.encoders import HeteroMessageEncoder
 from random import randint, seed
 import torch
 

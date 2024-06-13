@@ -1,17 +1,15 @@
-import set_determinism
 import os.path as osp
 from tqdm import tqdm
 import torch
 from sklearn.metrics import average_precision_score, roc_auc_score
 from torch.nn import Linear
-from modified_tgn import AttentionTGN
 from torch_geometric.datasets import JODIEDataset
 from torch_geometric.loader import TemporalDataLoader
 from torch_geometric.nn import TGNMemory, TransformerConv
 from torch_geometric.nn.models.tgn import (
     LastNeighborLoader,
 )
-from message_encoder import ExampleMessageTransformer, SumAggregator, MLPMessageEncoder, GraphAttention
+from src.nn.encoders import SumAggregator, GraphAttention
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
