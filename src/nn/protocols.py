@@ -46,3 +46,11 @@ class MemoryProtocol(Protocol):
                  hidden_state: Tensor
                  ) -> Tensor:
         pass
+
+class MemoryEncoderProtocol(Protocol):
+    def __call__(self, *args, **kwargs):
+        pass
+
+class GraphEncoderProtocol(Protocol):
+    def __call__(self, *args, **kwargs):
+        pass

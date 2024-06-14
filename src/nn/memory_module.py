@@ -52,12 +52,14 @@ class MemoryModule(nn.Module):
 
         msg = self.msg_enc(**asdict(batch))
 
-        # map dst IDs to temporary index
-        unique_ids, index = torch.unique(dst_ids, return_inverse=True)
+        with torch.no_grad():
+            # map dst IDs to temporary index
+            unique_ids, index = torch.unique(dst_ids, return_inverse=True)
+            # get the first seen copy of each node memory
+            mem_idx, _ = torch.unique(index, return_inverse=True)
+
         agg = self.aggregator(index=index, values=msg, num_nodes=unique_ids.size(0))
 
-        # get the first seen copy of each node memory
-        mem_idx, _ = torch.unique(index, return_inverse=True)
         prev_memories = batch.dst_memories[mem_idx]
         memories = self.memory_enc(hidden_state=prev_memories, input_tensor=agg)
         return unique_ids, memories

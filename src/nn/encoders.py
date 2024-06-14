@@ -292,3 +292,5 @@ class TimeEncoder(torch.nn.Module):
 
     def forward(self, t: Tensor) -> Tensor:
         return self.lin(t.view(-1, 1)).cos()
+
+
