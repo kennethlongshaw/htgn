@@ -1,10 +1,10 @@
 import torch.nn as nn
 from torch import Tensor
 from torch_geometric.utils import scatter
-from src.utils.utils import filter_by_index
 import pytorch_lightning as pl
 import torch
 from dataclasses import dataclass
+from ..utils.utils import filter_by_index
 
 
 class MessageTransformer(nn.Module):
@@ -23,7 +23,8 @@ class MessageTransformer(nn.Module):
         super().__init__()
         self.src_norm = nn.LayerNorm(src_dim, bias=bias)
         self.dst_norm = nn.LayerNorm(dst_dim, bias=bias)
-        self.src_linear = nn.Linear(in_features=src_dim, out_features=emb_dim, bias=bias)
+        self.src_linear_k = nn.Linear(in_features=src_dim, out_features=emb_dim, bias=bias)
+        self.src_linear_v = nn.Linear(in_features=src_dim, out_features=emb_dim, bias=bias)
         self.dst_linear = nn.Linear(in_features=dst_dim, out_features=emb_dim, bias=bias)
         self.attn = nn.MultiheadAttention(num_heads=n_head,
                                           embed_dim=emb_dim,
@@ -40,16 +41,14 @@ class MessageTransformer(nn.Module):
 
         self.attn_weight = None
 
-    def forward(self, src, dst):
+    def forward(self, src, dst, need_weights=False):
         # norm and align
-        src = self.src_linear(self.src_norm(src))
+        src_k = self.src_linear_k(self.src_norm(src))
+        src_v = self.src_linear_v(self.src_norm(src))
         dst = self.dst_linear(self.dst_norm(dst))
 
-        # Determine whether to compute attention weights based on the mode
-        need_weights = not self.training  # True if in eval mode, False if in training mode
-
         # Use src as both key and value in the attention mechanism
-        attn_out, self.attn_weight = self.attn(query=dst.unsqueeze(0), key=src.unsqueeze(0), value=src.unsqueeze(0),
+        attn_out, self.attn_weight = self.attn(query=dst.unsqueeze(0), key=src_k.unsqueeze(0), value=src_v.unsqueeze(0),
                                                is_causal=False, attn_mask=None, need_weights=need_weights
                                                )
         x = dst + attn_out.squeeze(0)  # Remove the batch dimension added for multi-head attention
@@ -67,10 +66,10 @@ class HeteroMessageEncoder_Config:
     time_dim: int
     edge_types: list[tuple[int, int, int]]
     dropout: float
-    n_head: int = 1,
-    mlp_expansion_factor: int = 2,
-    bias: bool = False,
-    entity_dim: int = 2,
+    n_head: int = 1
+    mlp_expansion_factor: int = 2
+    bias: bool = False
+    entity_dim: int = 2
     action_dim: int = 3
 
 
@@ -104,8 +103,14 @@ class HeteroMessageEncoder(pl.LightningModule):
         self.node_norms = nn.ModuleList([nn.LayerNorm(d + cfg.emb_dim) for d in cfg.node_dims])
         self.edge_norms = nn.ModuleList([nn.LayerNorm(d + cfg.emb_dim) for d in cfg.edge_dims])
 
-        # src_f including memory_dim, emb dim, edge_f including emb dim, time_dim, entity_emb[idx], action_emb[idx]]
-        encoder_dims = [(cfg.node_dims[e[0]] + cfg.memory_dim + cfg.edge_dims[e[1]] + cfg.time_dim + cfg.emb_dim * 4,
+        encoder_dims = [(cfg.node_dims[e[0]] +  # src node dim
+                         cfg.memory_dim +
+                         cfg.emb_dim +  # node type emb
+                         cfg.edge_dims[e[1]] +
+                         cfg.emb_dim +  # edge type emb
+                         cfg.time_dim +
+                         cfg.emb_dim +  # entity type emb
+                         cfg.emb_dim,  # action type emb
                          cfg.node_dims[e[2]] + cfg.memory_dim + cfg.emb_dim)
                         for e in cfg.edge_types]
 
@@ -160,7 +165,7 @@ class HeteroMessageEncoder(pl.LightningModule):
         # concat all node data to normalize at once
         concat_node_features = [('src', i, src) for i, src in enumerate(src_features)] + \
                                [('dst', j, dst) for j, dst in enumerate(dst_features)]
-        concat_node_types = src_node_types + dst_node_types
+        concat_node_types = src_node_types.tolist() + dst_node_types.tolist()
 
         norm_src_features = {}
         norm_dst_features = {}
@@ -169,32 +174,31 @@ class HeteroMessageEncoder(pl.LightningModule):
         # this is a bit messy because we are operating on list of ragged tensors
         for type_id in set(concat_node_types):
             type_data = filter_by_index(concat_node_features, concat_node_types, type_id)
-            if len(type_data) > 0:
-                direction = [f[0] for f in type_data]
-                og_index = [f[1] for f in type_data]
-                type_features = torch.stack([f[2] for f in type_data])
-                node_type_emb = self.node_emb_layers(torch.tensor(type_id)).repeat(type_features.shape[0], 1)
+            direction = [f[0] for f in type_data]
+            og_index = [f[1] for f in type_data]
+            type_features = torch.stack([f[2] for f in type_data])
+            node_type_emb = self.node_emb_layers(torch.tensor(type_id)).repeat(type_features.shape[0], 1)
 
-                if type_features.numel() > 0:
-                    type_features = torch.cat([type_features, node_type_emb], dim=1)
-                else:
-                    type_features = node_type_emb
+            if type_features.numel() > 0:
+                type_features = torch.cat([type_features, node_type_emb], dim=1)
+            else:
+                type_features = node_type_emb
 
-                node_norm_features = self.node_norms[type_id](type_features)
-                for node_dir, idx, feat in zip(direction, og_index, node_norm_features):
-                    match node_dir:
-                        case 'src':
-                            norm_src_features[idx] = feat
-                        case 'dst':
-                            norm_dst_features[idx] = feat
-                        case _:
-                            raise ValueError(f'Invalid direction of {node_dir}')
+            node_norm_features = self.node_norms[type_id](type_features)
+            for node_dir, idx, feat in zip(direction, og_index, node_norm_features):
+                match node_dir:
+                    case 'src':
+                        norm_src_features[idx] = feat
+                    case 'dst':
+                        norm_dst_features[idx] = feat
+                    case _:
+                        raise ValueError(f'Invalid direction of {node_dir}')
 
         # norm edge features by types and organize into feature dicts
         # this is a bit messy because we are operating on list of ragged tensors
         norm_edge_feature_dict = {}
         edge_features = [(i, f) for i, f in enumerate(edge_features)]
-        for type_id, _ in enumerate(self.edge_norms):
+        for type_id in range(len(self.edge_norms)):
             type_data = filter_by_index(edge_features, edge_types, type_id)
             if len(type_data) > 0:
                 og_index = [f[0] for f in type_data]
@@ -235,9 +239,61 @@ class HeteroMessageEncoder(pl.LightningModule):
                                     ],
                                    dim=1)
 
-            memory_dst = dst_memories[idx]
-            concat_dst = torch.cat([dst_f, dst_memories], dim=1)
-            messages[idx] = self.edge_encoders[edge_name[1]](src=concat_src, dst=dst_f)
+            concat_dst = torch.cat([dst_f, dst_memories[idx]], dim=1)
+
+            messages[idx] = self.edge_encoders[edge_name[1]](src=concat_src, dst=concat_dst)
+
+        return messages
+
+    def draft_forward(self,
+                          rel_t_enc: Tensor,
+                          entity_types: Tensor,
+                          action_types: Tensor,
+                          src_node_types: Tensor,
+                          src_features: list[Tensor],
+                          src_memories: Tensor,
+                          edge_types: Tensor,
+                          edge_features: list[Tensor],
+                          dst_node_types: Tensor,
+                          dst_features: list[Tensor],
+                          dst_memories: Tensor
+                          ):
+        # Learning Embedding
+        entity_emb = self.entity_emb_layer(entity_types)
+        action_emb = self.action_emb_layer(action_types)
+
+        # Concat node features, types, and embeddings
+        node_types = torch.cat([src_node_types, dst_node_types])
+        node_type_emb = self.node_emb_layers(node_types)
+        node_features_norm = []
+        for norm, feat, emb in zip(self.node_norms, src_features + dst_features, node_type_emb):
+            if feat.dim() > 0:
+                print(feat.dim())
+                print(feat)
+                print(emb.expand(len(feat), -1))
+                node_features_norm.append(norm(torch.cat([feat, emb.expand(feat.shape[0], -1)], dim=1)))
+            else:
+                node_features_norm.append(norm(emb))
+
+        # Concat edge features, types, and embeddings
+        edge_type_emb = self.edge_emb_layers([e[1] for e in edge_types])
+        edge_features_norm = [norm(torch.cat([feat, emb.expand(feat.shape[0], -1)], dim=1) if feat.dim() > 0 else emb)
+                              for norm, feat, emb in zip(self.edge_norms, edge_features, edge_type_emb)]
+
+        # Prepare message inputs
+        src_input = torch.cat([torch.stack(node_features_norm[:len(src_features)]),
+                               src_memories,
+                               torch.stack(edge_features_norm),
+                               rel_t_enc,
+                               entity_emb,
+                               action_emb], dim=1)
+        dst_input = torch.cat([torch.stack(node_features_norm[len(src_features):]), dst_memories], dim=1)
+
+        # Encode messages
+        messages = torch.zeros(len(src_features), self.emb_dim, device=entity_emb.device)
+        for edge_type in range(len(self.edge_encoders)):
+            idx = torch.where(edge_types == edge_type)[0]
+            messages[idx] = self.edge_encoders[edge_type](src_input[idx], dst_input[idx])
 
         return messages
 
@@ -292,5 +348,3 @@ class TimeEncoder(torch.nn.Module):
 
     def forward(self, t: Tensor) -> Tensor:
         return self.lin(t.view(-1, 1)).cos()
-
-

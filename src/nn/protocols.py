@@ -1,6 +1,7 @@
 from typing import List
 from torch import Tensor
-from typing import Protocol
+from typing import Protocol, Tuple
+import memory_module as mm
 
 
 class MessageEncoderProtocol(Protocol):
@@ -20,7 +21,7 @@ class MessageEncoderProtocol(Protocol):
             dst_node_types: List[int],
             dst_features: List[Tensor],
             dst_memories: Tensor
-            ) -> Tensor:
+    ) -> Tensor:
         pass
 
 
@@ -47,10 +48,25 @@ class MemoryProtocol(Protocol):
                  ) -> Tensor:
         pass
 
+
 class MemoryEncoderProtocol(Protocol):
-    def __call__(self, *args, **kwargs):
+    def __call__(self,
+                 batch: mm.MemoryBatch,
+                 dst_ids: Tensor
+                 ) -> Tuple[Tensor, Tensor]:
         pass
 
+
 class GraphEncoderProtocol(Protocol):
-    def __call__(self, *args, **kwargs):
+    def __call__(self, x_dict: dict[str:Tensor],
+                 edge_index_dict: dict[str:Tensor]
+                 ) -> Tensor:
+        pass
+
+
+class LinkPredictorProtocol(Protocol):
+    def __call__(self,
+                 z_dict: dict[str:Tensor],
+                 edge_label_indices: dict[tuple:Tensor],
+                 edge_types) -> dict[int: Tensor]:
         pass

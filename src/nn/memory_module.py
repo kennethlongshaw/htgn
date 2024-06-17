@@ -12,14 +12,15 @@ class MemoryBatch:
     entity_types: Tensor
     action_types: Tensor
 
-    src_node_types: list[int]
+    src_node_types: Tensor
     src_features: list[Tensor]
     src_memories: Tensor
 
-    edge_types: list[int]
+    edge_types: Tensor
     edge_features: list[Tensor]
+    edge_labels: Tensor
 
-    dst_node_types: list[int]
+    dst_node_types: Tensor
     dst_features: list[Tensor]
     dst_memories: Tensor
 
@@ -48,7 +49,7 @@ class MemoryModule(nn.Module):
         # convert the relative time encoding
         rel_time = batch.rel_time
         del batch.rel_time
-        batch.rel_time_enc = self.time_enc(batch.rel_time)
+        batch.rel_time_enc = self.time_enc(rel_time)
 
         msg = self.msg_enc(**asdict(batch))
 

@@ -3,6 +3,7 @@ import pytorch_lightning as pl
 import torch
 from torch_geometric.datasets import JODIEDataset
 from torch_geometric.loader import TemporalDataLoader
+from torch_geometric.nn import MessagePassing
 from dataclasses import dataclass
 
 
@@ -48,7 +49,6 @@ class TemporalDataModule(pl.LightningDataModule):
         )
 
 
-
 @dataclass
 class HTGN_Config:
     num_nodes: int
@@ -66,7 +66,7 @@ class HTGN(pl.LightningModule):
                  message_encoder,
                  batch_agg,
                  memory,
-                 gnn,
+                 gnn: MessagePassing,
                  link_pred,
                  feature_store,
                  graph_store,
@@ -83,7 +83,7 @@ class HTGN(pl.LightningModule):
                                                             time_dim=config.time_dim,
                                                             bias=config.bias
                                                             ),
-                             aggregator_module=batch_agg()
+                             aggregator_module=batch_agg
                              )
         self.gnn = gnn(in_channels=config.memory_dim,
                        out_channels=config.embedding_dim,
