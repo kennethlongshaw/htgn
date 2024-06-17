@@ -316,11 +316,11 @@ class ScatterAggregator(torch.nn.Module):
         match impl:
             case 'native':
                 valid_reduce = ("sum", "prod", "mean", "amax", "amin")
-                assert reduce in valid_reduce, assert_msg.format(reduce=reduce, impl=impl) + ', '.join(valid_reduce)
+                assert reduce in valid_reduce_native, assert_msg.format(reduce=reduce, impl=impl) + ', '.join(valid_reduce)
 
             case 'geometric':
                 valid_reduce = ('sum', 'add', 'mul', 'mean', 'min', 'max')
-                assert reduce in valid_reduce, assert_msg.format(reduce=reduce, impl=impl) + ', '.join(valid_reduce)
+                assert reduce in valid_reduce_geo, assert_msg.format(reduce=reduce, impl=impl) + ', '.join(valid_reduce)
 
         self.reduce = reduce
 

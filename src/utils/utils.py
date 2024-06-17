@@ -1,12 +1,27 @@
 from itertools import islice
-from ..nn.memory_module import MemoryBatch
+#from ..nn.memory_module import MemoryBatch
 import torch
 from torch import Tensor
 from torch_geometric.data import HeteroData
 from dataclasses import dataclass
 
+@dataclass
+class MemoryBatch:
+    rel_time: Tensor
+    entity_types: Tensor
+    action_types: Tensor
 
+    src_node_types: Tensor
+    src_features: list[Tensor]
+    src_memories: Tensor
 
+    edge_types: Tensor
+    edge_features: list[Tensor]
+    edge_labels: Tensor
+
+    dst_node_types: Tensor
+    dst_features: list[Tensor]
+    dst_memories: Tensor
 
 def iter_index(iterable, value, start=0, stop=None):
     "Return indices where a value occurs in a sequence or iterable."
@@ -42,7 +57,43 @@ def batch_to_graph(batch: MemoryBatch,
                    memories: Tensor,
                    memory_ids: Tensor
                    ) -> HeteroData:
+    """
+    Convert a MemoryBatch object to a HeteroData graph object.
+
+    Args:
+        batch (MemoryBatch): The MemoryBatch object containing the batch data.
+        src_ids (Tensor): The source node IDs.
+        dst_ids (Tensor): The destination node IDs.
+        memories (Tensor): The memory tensor containing node features.
+        memory_ids (Tensor): The memory IDs corresponding to the node IDs.
+
+    Returns:
+        HeteroData: The converted HeteroData graph object.
+
+    Description:
+        This function takes a MemoryBatch object and converts it into a HeteroData graph object.
+        The graph object contains nodes and edges with their corresponding features and labels.
+        The node features are assigned from the memories tensor, indexed by the memory_ids.
+        The edges are added to the graph based on the source and destination node IDs and types.
+        The edge labels and batch IDs are also assigned to the edges in the graph.
+
+        The resulting HeteroData graph object has the following structure:
+        - Nodes: Nodes are identified by their type and ID. The node features are stored in the
+                 'x' attribute of each node type.
+        - Edges: Edges are identified by their source node type, edge type, and destination node type.
+                 The edge indices are stored in the 'edge_index' attribute of each edge type.
+                 The edge labels are stored in the 'edge_label' attribute of each edge type.
+                 The batch IDs are stored in the 'batch_id' attribute of each edge type.
+
+    Note:
+        The function assumes that the MemoryBatch object contains the necessary attributes such as
+        src_node_types, dst_node_types, edge_types, edge_labels, and record_id.
+        The memory_ids tensor should have the same length as the unique node IDs in the batch.
+        The src_ids and dst_ids tensors should have the same length as the number of edges in the batch.
+    """
+
     graph = HeteroData()
+    batch.index = torch.tensor([i for i in range(len(dst_ids))])
     nodes = torch.cat([torch.stack([src_ids, batch.src_node_types], dim=1),
                        torch.stack([dst_ids, batch.dst_node_types], dim=1)]).unique(dim=0)
 
@@ -68,5 +119,8 @@ def batch_to_graph(batch: MemoryBatch,
         edge_key = (f'node_{src_type}', f'edge_{edge_type.item()}', f'node_{dst_type}')
         graph[edge_key].edge_index = torch.stack([src_edge_indices, dst_edge_indices])
         graph[edge_key].edge_label = batch.edge_labels[edge_mask]
+
+        # Add batch ID as an attribute to the edge data
+        graph[edge_key].batch_id = batch.index[edge_mask]
 
     return graph
