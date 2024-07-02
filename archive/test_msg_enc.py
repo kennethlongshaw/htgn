@@ -1,11 +1,18 @@
-from src.nn.encoders import HeteroMessageEncoder
+from src.nn.encoders import HeteroMessageEncoder, HeteroMessageEncoder_Config
+from src.nn.protocols import MemoryBatch
 from random import randint, seed
 import torch
+from dataclasses import asdict
 
 seed(10)
 
 
-def generate_fake_data(record_cnt, n_edge_types, max_dim=5):
+def generate_fake_data(record_cnt,
+                       n_edge_types,
+                       memory_dim,
+                       time_dim,
+                       max_dim=5,
+                       ):
     # Parameters for the encoder
 
     num_edge_types = n_edge_types
@@ -27,7 +34,6 @@ def generate_fake_data(record_cnt, n_edge_types, max_dim=5):
                 zero_dim_node_f += 1
             else:
                 node_dims.append(randint(0, max_dim))
-
 
         if randint(0, 1):
             if len_n < 2:
@@ -57,31 +63,56 @@ def generate_fake_data(record_cnt, n_edge_types, max_dim=5):
     entity_types = torch.randint(0, 2, (record_cnt,))  # 0 NODE, 1 EDGE
     action_types = torch.randint(0, 3, (record_cnt,))  # 0 CREATE, 1 UPDATE, 2 DELETE
 
-    src_node_types = [e[0] for e in edge_records]
-    edge_types = [e[1] for e in edge_records]
-    dst_node_types = [e[2] for e in edge_records]
+    src_node_types = torch.tensor([e[0] for e in edge_records])
+    edge_types = torch.tensor([e[1] for e in edge_records])
+    dst_node_types = torch.tensor([e[2] for e in edge_records])
 
     src_features = [torch.randn(node_dims[n]) for n in src_node_types]
     edge_features = [torch.randn(edge_dims[e]) for e in edge_types]
     dst_features = [torch.randn(node_dims[n]) for n in dst_node_types]
 
-    return {'entity_types': entity_types,
-            'action_types': action_types,
-            'src_node_types': src_node_types,
-            'src_features': src_features,
-            'edge_types': edge_types,
-            'edge_features': edge_features,
-            'dst_node_types': dst_node_types,
-            'dst_features': dst_features,
-            'schema': {'node_dims': node_dims,
-                       'edge_dims': edge_dims,
-                       'edges': edges
-                       }
-            }
+    src_ids = torch.randint(0, record_cnt, (record_cnt,))
+    dst_ids = torch.randint(0, record_cnt, (record_cnt,))
+    neg_ids = torch.randint(0, record_cnt, (record_cnt,))
+
+
+    src_memories = torch.rand(record_cnt, memory_dim)
+    dst_memories = torch.rand(record_cnt, memory_dim)
+
+
+    rel_time_enc = torch.rand(record_cnt, time_dim)
+
+    schema = {'node_dims': node_dims,
+              'edge_dims': edge_dims,
+              'edges': edges
+              }
+
+    records = {'entity_types': entity_types,
+               'action_types': action_types,
+               'rel_time_enc': rel_time_enc,
+               'src_node_types': src_node_types,
+               'src_features': src_features,
+               'src_ids': src_ids,
+               'edge_types': edge_types,
+               'edge_features': edge_features,
+               'dst_node_types': dst_node_types,
+               'dst_features': dst_features,
+               'dst_ids': dst_ids,
+               'neg_ids': neg_ids,
+               'src_memories': src_memories,
+               'dst_memories': dst_memories,
+               }
+
+    batch = MemoryBatch(**records)
+    return schema, batch
 
 
 def test_msg_enc(record_cnt):
-    records = generate_fake_data(record_cnt, 10)
+    memory_dim = 5
+    time_dim = 5
+    schema, batch = generate_fake_data(record_cnt, 10,
+                                       time_dim=time_dim,
+                                       memory_dim=memory_dim)
     emb_dim = 12
 
     dropout = 0.1
@@ -89,11 +120,7 @@ def test_msg_enc(record_cnt):
     mlp_expansion_factor = 2
     bias = True
 
-    schema = records['schema']
-    del records['schema']
-
-    # Instantiate the encoder
-    encoder = HeteroMessageEncoder(
+    cfg = HeteroMessageEncoder_Config(
         emb_dim=emb_dim,
         node_dims=schema['node_dims'],
         edge_dims=schema['edge_dims'],
@@ -101,13 +128,18 @@ def test_msg_enc(record_cnt):
         dropout=dropout,
         n_head=n_head,
         mlp_expansion_factor=mlp_expansion_factor,
-        bias=bias
+        bias=bias,
+        memory_dim=memory_dim,
+        time_dim=time_dim
     )
+
+    # Instantiate the encoder
+    encoder = HeteroMessageEncoder(cfg=cfg)
 
     print(encoder)
 
     # Process through the encoder
-    messages = encoder(**records)
+    messages = encoder(batch)
 
     return messages
 

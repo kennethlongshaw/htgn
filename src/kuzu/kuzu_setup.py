@@ -1,8 +1,5 @@
-from kuzu_iterface import KuzuInterface
-import polars as pl
+from src.kuzu.kuzu_iterface import KuzuInterface
 import kuzu
-import torch_geometric
-import torch
 import time
 def prep_schema(n_emb):
     nodes = {"user": {'fields': {'user_id': 'INT32', 'embeddings': f'DOUBLE[{n_emb}]'},
@@ -68,7 +65,7 @@ def load_bigger_sample_db(connection):
     connection.execute('COPY Tags FROM "./tags.csv" (HEADER=TRUE)')
 
 
-ku = KuzuInterface(db_path="./demo_db")
+ku = KuzuInterface(db_path="../../demo_db")
 
 # ku.drop_all_data()
 # ku.drop_schema()

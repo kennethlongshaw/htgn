@@ -31,7 +31,7 @@ from torch_geometric.nn.models.tgn import (
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-base_path = 'data/'
+base_path = '../data/'
 path = osp.join(base_path, 'data', 'JODIE')
 dataset = JODIEDataset(path, name='wikipedia')
 data = dataset[0]
