@@ -1,4 +1,3 @@
-import set_determinism
 import os.path as osp
 
 from tqdm import tqdm

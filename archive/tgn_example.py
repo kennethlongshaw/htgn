@@ -11,7 +11,6 @@
 # decided to present this version here as it is more realsitic and a better
 # test bed for future methods.
 
-import set_determinism
 import os.path as osp
 
 from tqdm import tqdm

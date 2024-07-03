@@ -1,6 +1,6 @@
 import torch.nn as nn
 import torch
-from reference_transformers import Transformer
+from src.nn.reference_transformers import Transformer
 
 
 class DotProductLinkPredictor(nn.Module):

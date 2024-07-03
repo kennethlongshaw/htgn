@@ -4,8 +4,8 @@ from torch_geometric.utils import scatter
 import pytorch_lightning as pl
 import torch
 from dataclasses import dataclass
-from ..utils.utils import filter_by_index
-
+from src.utils.utils import filter_by_index
+from src.nn.protocols import MemoryBatch
 
 class MessageTransformer(nn.Module):
     """
@@ -125,20 +125,7 @@ class HeteroMessageEncoder(pl.LightningModule):
                                             for src_dim, dst_dim in encoder_dims])
 
     def forward(self,
-                rel_t_enc: Tensor,
-                entity_types: Tensor,
-                action_types: Tensor,
-
-                src_node_types: list[int],
-                src_features: list[Tensor],
-                src_memories: Tensor,
-
-                edge_types: list[int],
-                edge_features: list[Tensor],
-
-                dst_node_types: list[int],
-                dst_features: list[Tensor],
-                dst_memories: Tensor
+                batch: MemoryBatch
                 ):
         """
         :param rel_t_enc: Tensor of relative time encoding
@@ -159,13 +146,13 @@ class HeteroMessageEncoder(pl.LightningModule):
         """
 
         # Learning Embedding
-        entity_emb = self.entity_emb_layer(entity_types)
-        action_emb = self.action_emb_layer(action_types)
+        entity_emb = self.entity_emb_layer(batch.entity_types)
+        action_emb = self.action_emb_layer(batch.action_types)
 
         # concat all node data to normalize at once
-        concat_node_features = [('src', i, src) for i, src in enumerate(src_features)] + \
-                               [('dst', j, dst) for j, dst in enumerate(dst_features)]
-        concat_node_types = src_node_types.tolist() + dst_node_types.tolist()
+        concat_node_features = [('src', i, src) for i, src in enumerate(batch.src_features)] + \
+                               [('dst', j, dst) for j, dst in enumerate(batch.dst_features)]
+        concat_node_types = batch.src_node_types.tolist() + batch.dst_node_types.tolist()
 
         norm_src_features = {}
         norm_dst_features = {}
@@ -197,9 +184,9 @@ class HeteroMessageEncoder(pl.LightningModule):
         # norm edge features by types and organize into feature dicts
         # this is a bit messy because we are operating on list of ragged tensors
         norm_edge_feature_dict = {}
-        edge_features = [(i, f) for i, f in enumerate(edge_features)]
+        edge_features = [(i, f) for i, f in enumerate(batch.edge_features)]
         for type_id in range(len(self.edge_norms)):
-            type_data = filter_by_index(edge_features, edge_types, type_id)
+            type_data = filter_by_index(edge_features, batch.edge_types, type_id)
             if len(type_data) > 0:
                 og_index = [f[0] for f in type_data]
                 type_features = torch.stack([f[1] for f in type_data])
@@ -214,7 +201,10 @@ class HeteroMessageEncoder(pl.LightningModule):
 
         # align features before encoding
         message_dict = {}
-        for i, edge_name in enumerate(zip(src_node_types, edge_types, dst_node_types)):
+        for i, edge_name in enumerate(zip(batch.src_node_types,
+                                          batch.edge_types,
+                                          batch.dst_node_types)
+                                      ):
             # edge_name format is (src node type, edge type, dst node type)
             features = norm_src_features[i], norm_edge_feature_dict[i], norm_dst_features[i]
             if edge_name not in message_dict:
@@ -223,7 +213,7 @@ class HeteroMessageEncoder(pl.LightningModule):
                 message_dict[edge_name][i] = features
 
         # final message encoding
-        messages = torch.zeros(len(src_features), self.emb_dim)
+        messages = torch.zeros(len(batch.src_features), self.emb_dim)
         for edge_name, feature_dict in message_dict.items():
             idx = torch.tensor(list(feature_dict.keys()))
             src_f = torch.stack([i[0] for i in feature_dict.values()])
@@ -231,33 +221,33 @@ class HeteroMessageEncoder(pl.LightningModule):
             dst_f = torch.stack([i[2] for i in feature_dict.values()])
             concat_src = torch.cat(tensors=
                                    [src_f,
-                                    src_memories[idx],
+                                    batch.src_memories[idx],
                                     edge_f,
-                                    rel_t_enc[idx],
+                                    batch.rel_time_enc[idx],
                                     entity_emb[idx],
                                     action_emb[idx]
                                     ],
                                    dim=1)
 
-            concat_dst = torch.cat([dst_f, dst_memories[idx]], dim=1)
+            concat_dst = torch.cat([dst_f, batch.dst_memories[idx]], dim=1)
 
             messages[idx] = self.edge_encoders[edge_name[1]](src=concat_src, dst=concat_dst)
 
         return messages
 
     def draft_forward(self,
-                          rel_t_enc: Tensor,
-                          entity_types: Tensor,
-                          action_types: Tensor,
-                          src_node_types: Tensor,
-                          src_features: list[Tensor],
-                          src_memories: Tensor,
-                          edge_types: Tensor,
-                          edge_features: list[Tensor],
-                          dst_node_types: Tensor,
-                          dst_features: list[Tensor],
-                          dst_memories: Tensor
-                          ):
+                      rel_t_enc: Tensor,
+                      entity_types: Tensor,
+                      action_types: Tensor,
+                      src_node_types: Tensor,
+                      src_features: list[Tensor],
+                      src_memories: Tensor,
+                      edge_types: Tensor,
+                      edge_features: list[Tensor],
+                      dst_node_types: Tensor,
+                      dst_features: list[Tensor],
+                      dst_memories: Tensor
+                      ):
         # Learning Embedding
         entity_emb = self.entity_emb_layer(entity_types)
         action_emb = self.action_emb_layer(action_types)
@@ -310,17 +300,17 @@ class ScatterAggregator(torch.nn.Module):
         )
         self.impl = impl
 
-        valid_reduce_geo = ('sum', 'add', 'mul', 'mean', 'min', 'max')
-        valid_reduce_native = ("sum", "prod", "mean", "amax", "amin")
         assert_msg = 'Specified reduce {reduce} for {impl} is invalid. Options are: '
         match impl:
             case 'native':
-                valid_reduce = ("sum", "prod", "mean", "amax", "amin")
-                assert reduce in valid_reduce_native, assert_msg.format(reduce=reduce, impl=impl) + ', '.join(valid_reduce)
+                valid_reduce_native = ("sum", "prod", "mean", "amax", "amin")
+                assert reduce in valid_reduce_native, (
+                        assert_msg.format(reduce=reduce, impl=impl) + ', '.join(valid_reduce_native))
 
             case 'geometric':
-                valid_reduce = ('sum', 'add', 'mul', 'mean', 'min', 'max')
-                assert reduce in valid_reduce_geo, assert_msg.format(reduce=reduce, impl=impl) + ', '.join(valid_reduce)
+                valid_reduce_geo = ('sum', 'add', 'mul', 'mean', 'min', 'max')
+                assert reduce in valid_reduce_geo, (
+                        assert_msg.format(reduce=reduce, impl=impl) + ', '.join(valid_reduce_geo))
 
         self.reduce = reduce
 
@@ -342,9 +332,6 @@ class TimeEncoder(torch.nn.Module):
         super().__init__()
         self.out_channels = out_channels
         self.lin = nn.Linear(1, out_channels)
-
-    def reset_parameters(self):
-        self.lin.reset_parameters()
 
     def forward(self, t: Tensor) -> Tensor:
         return self.lin(t.view(-1, 1)).cos()
