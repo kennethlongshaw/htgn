@@ -1,34 +1,44 @@
 from src.models.make_htgn import make_HTGN
-from src.data_loaders.data_loaders import PreppedDataset, df_collate_fn
-from torch.utils.data import DataLoader
+from src.data_loaders.data_loaders import GraphDataModule, DataModuleConfig
 from src.training.training_config import Training_Config
-from src.data_stores.stores import MemoryStore, MessageStore, LastUpdateStore
-from src.utils.utils import df_to_batch
+import pytorch_lightning as lit
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
+from dvclive.lightning import DVCLiveLogger
+from src.utils.set_determinism import set_determinism
 
 
-def training(file_name,
+def training(dm_cfg: DataModuleConfig,
              train_cfg: Training_Config):
-    dataset = PreppedDataset(file_name=file_name)
-    dataloader = DataLoader(dataset=dataset,
-                            collate_fn=df_collate_fn
-                            )
+
+    set_determinism(train_cfg.seed_value)
+
+    datamodule = GraphDataModule(cfg=dm_cfg)
 
     model = make_HTGN(train_cfg=train_cfg,
-                      schema=dataset.schema
+                      schema=datamodule.train_dataset.schema
                       )
 
-    lupdate_store = LastUpdateStore(num_nodes=dataset.schema.num_nodes)
-    mem_store = MemoryStore(num_nodes=dataset.schema.num_nodes,
-                            memory_dim=train_cfg.memory_dim
-                            )
-    message_store = MessageStore()
+    trainer = lit.Trainer()
 
-    for batch in dataloader:
-        tensor_batch = df_to_batch(batch)
-        last_messages = message_store.get_from_msg_store(tensor_batch.dst_ids)
-        last_messages.time = lupdate_store.get_last_update(tensor_batch.dst_ids)
-        last_messages.dst_last_memories = mem_store.get_memory(tensor_batch.dst_ids)
-        last_messages.src_last_memories = mem_store.get_memory(tensor_batch.src_ids)
-        last_messages.neg_last_memories = mem_store.get_memory(tensor_batch.neg_ids)
+    trainer.fit(model=model, datamodule=datamodule)
 
-        model(batch, last_messages)
+    score_name = 'val_accuracy'
+
+    checkpoint_callback = ModelCheckpoint(monitor=score_name,
+                                          mode='max',
+                                          verbose=True,
+                                          save_top_k=1
+                                          )
+
+    logger = DVCLiveLogger()
+
+    trainer = pl.Trainer(deterministic=True, max_epochs=train_cfg.epochs, enable_progress_bar=True, logger=logger,
+                         callbacks=[checkpoint_callback])
+
+    trainer.fit(model=model, datamodule=datamodule)
+
+    score = checkpoint_callback.best_model_score
+
+    print(f'Best score was {score}')
+    logger.log_metrics({f'best_{score_name}': score})

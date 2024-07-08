@@ -1,8 +1,10 @@
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, DataLoader
 import polars as pl
 from typing import Optional
 from dataclasses import dataclass
-
+import pytorch_lightning as lit
+from src.utils.utils import df_to_batch
+from src.nn.protocols import MemoryBatch
 
 @dataclass
 class GraphSchema:
@@ -17,21 +19,46 @@ class GraphSchema:
     edge_types: Optional[list[tuple[int, int, int]]] = None
 
 
+@dataclass
+class DataModuleConfig:
+    file_name: str
+    time_column: str
+    batch_size: int
+    num_workers: int = 1
+    train_ratio: float = 0.7
+    val_ratio: float = 0.15
+    descending: bool = None
+    columns: list = None
+    schema: GraphSchema = None
+
+
 class PreppedDataset(IterableDataset):
     def __init__(self,
-                 file_name: str,
-                 sort_by: str = None,
-                 descending: bool = None,
-                 columns: list = None,
-                 schema: GraphSchema = None
+                 cfg: DataModuleConfig,
+                 split: str = 'train'
                  ):
         super().__init__()
-        self.df = pl.read_parquet(file_name, columns=columns)
-        if sort_by:
-            self.df = self.df.sort(sort_by, descending=descending)
+        self.df = pl.read_parquet(cfg.file_name, columns=cfg.columns)
 
-        self.validate_schema(schema)
-        self.schema = schema
+        # Calculate split indices
+        total_rows = len(self.df)
+        train_end = int(total_rows * cfg.train_ratio)
+        val_end = train_end + int(total_rows * cfg.val_ratio)
+
+        self.df = self.df.sort(cfg.time_column, descending=cfg.descending)
+
+        # Split the dataset
+        if split == 'train':
+            self.df = self.df.slice(0, train_end)
+        elif split == 'val':
+            self.df = self.df.slice(train_end, val_end - train_end)
+        elif split == 'test':
+            self.df = self.df.slice(val_end, total_rows - val_end)
+        else:
+            raise ValueError("Split must be 'train', 'val', or 'test'")
+
+        self.validate_schema(cfg.schema)
+        self.schema = cfg.schema
 
     def validate_schema(self, schema: GraphSchema):
         checked_schema_dims = self.get_schema_dims()
@@ -90,5 +117,48 @@ class PreppedDataset(IterableDataset):
         return self.df.iter_rows(named=True)
 
 
-def df_collate_fn(data: list) -> pl.DataFrame:
-    return pl.DataFrame(data)
+class GraphDataModule(lit.LightningDataModule):
+    def __init__(self, cfg: DataModuleConfig):
+        super().__init__()
+        self.cfg = cfg
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
+
+    def setup(self, stage: Optional[str] = None):
+        if stage == 'fit' or stage is None:
+            self.train_dataset = PreppedDataset(cfg=self.cfg, split='train')
+            self.val_dataset = PreppedDataset(cfg=self.cfg, split='val')
+        if stage == 'test' or stage is None:
+            self.test_dataset = PreppedDataset(cfg=self.cfg, split='test')
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.cfg.batch_size,
+            num_workers=self.cfg.num_workers,
+            collate_fn=df_collate_fn,
+            shuffle=False
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.cfg.batch_size,
+            num_workers=self.cfg.num_workers,
+            collate_fn=df_collate_fn,
+            shuffle=False
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.cfg.batch_size,
+            num_workers=self.cfg.num_workers,
+            collate_fn=df_collate_fn,
+            shuffle=False
+        )
+
+
+def df_collate_fn(data: list) -> MemoryBatch:
+    return df_to_batch(pl.DataFrame(data))

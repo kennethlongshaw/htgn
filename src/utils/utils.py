@@ -5,6 +5,7 @@ from torch import Tensor
 from torch_geometric.data import HeteroData
 from typing import Dict, Tuple, List, Optional, get_type_hints
 from dataclasses import fields
+from src.data_stores.stores import EdgeStore
 
 def iter_index(iterable, value, start=0, stop=None):
     "Return indices where a value occurs in a sequence or iterable."
@@ -33,81 +34,66 @@ def filter_by_index(data: list, index: list, selection: int):
     return [data[i] for i in mask]
 
 
-def zdict_lookup(hgraph: HeteroData,
-                 z_dict: dict,
+def zdict_lookup(emb_dim: int,
+                 mapping: dict[int: tuple[str, int]],
+                 z_dict: dict[str: Tensor],
                  ids: Tensor):
-    "z dict will have embeddings for nodes by type in the order they were in according to hgraph"
-    "hgraph will have the node id"
-    "ids will have the ids in the order we want"
 
-    # Must return in same order as given
-    return
+    # Initialize the output tensor
+    output = torch.zeros((len(ids), emb_dim), dtype=next(iter(z_dict.values())).dtype)
+
+    for i, node_id in enumerate(ids):
+        node_type, local_id = mapping[node_id.item()]
+        output[i] = z_dict[node_type][local_id]
+
+    return output
 
 
 @torch.no_grad()
-def batch_to_graph(batch: MemoryBatch,
-                   src_ids: Tensor,
-                   dst_ids: Tensor,
+def batch_to_graph(batch: EdgeStore,
                    memories: Tensor,
                    memory_ids: Tensor
                    ) -> Tuple[HeteroData, Dict]:
-    """
-    Convert a MemoryBatch object to a HeteroData graph object.
-
-    Args:
-        batch (MemoryBatch): The MemoryBatch object containing the batch data.
-        src_ids (Tensor): The source node IDs.
-        dst_ids (Tensor): The destination node IDs.
-        memories (Tensor): The memory tensor containing node features.
-        memory_ids (Tensor): The memory IDs corresponding to the node IDs.
-
-    Returns:
-        HeteroData: The converted HeteroData graph object.
-        Global Mapping: The local node IDs by type and they're global IDs as values
-
-    Description:
-        This function takes a MemoryBatch object and converts it into a HeteroData graph object.
-        The graph object contains nodes and edges with their corresponding features and labels.
-        The node features are assigned from the memories tensor, indexed by the memory_ids.
-        The edges are added to the graph based on the source and destination node IDs and types.
-
-        The resulting HeteroData graph object has the following structure:
-        - Nodes: Nodes are identified by their type and ID. The node features are stored in the
-                 'x' attribute of each node type.
-        - Edges: Edges are identified by their source node type, edge type, and destination node type.
-                 The edge indices are stored in the 'edge_index' attribute of each edge type.
-
-
-    Note:
-        The function assumes that the MemoryBatch object contains the necessary attributes such as
-        src_node_types, dst_node_types, edge_types, and record_id.
-        The memory_ids tensor should have the same length as the unique node IDs in the batch.
-        The src_ids and dst_ids tensors should have the same length as the number of edges in the batch.
-    """
-
+    # Initialize the heterogeneous graph and global mapping
     graph = HeteroData()
     global_mapping = {}
-    nodes = torch.cat([torch.stack([src_ids, batch.src_node_types], dim=1),
-                       torch.stack([dst_ids, batch.dst_node_types], dim=1)]).unique(dim=0)
 
-    # Assign node features from memories, indexed by memory_ids
+    # Combine source and destination nodes, and get unique nodes
+    nodes = torch.cat([torch.stack([batch.src_ids, batch.src_node_types], dim=1),
+                       torch.stack([batch.dst_ids, batch.dst_node_types], dim=1)]).unique(dim=0)
+
+    # Create a mapping from memory_ids to their indices
     mem_idx = {idx.item(): i for i, idx in enumerate(memory_ids)}
+
+    # Process nodes for each type
     types_idx = {}
     for node_type in nodes[:, 1].unique():
+        # Get nodes of this type
         type_nodes = nodes[nodes[:, 1] == node_type]
+
+        # Create a mapping from node ID to local index for this type
         type_idx = {n[0].item(): i for i, n in enumerate(type_nodes)}
 
+        # Update global mapping
         for k, v in type_idx.items():
             global_mapping[k] = (f'node_{node_type.item()}', v)
 
+        # Get memory indices for nodes of this type
         mem_type_idx = [mem_idx[t] for t in type_idx.keys()]
+
+        # Assign node features from memories
         graph[f'node_{node_type.item()}'].x = memories[mem_type_idx]
 
+        # Store type index mapping
         types_idx[node_type.item()] = type_idx
 
+    # Convert global node IDs to type-specific indices
+    src_type_indices = torch.tensor(
+        [types_idx[t.item()][s.item()] for s, t in zip(batch.src_ids, batch.src_node_types)])
+    dst_type_indices = torch.tensor(
+        [types_idx[t.item()][d.item()] for d, t in zip(batch.dst_ids, batch.dst_node_types)])
+
     # Add edges to the graph
-    src_type_indices = torch.tensor([types_idx[t.item()][s.item()] for s, t in zip(src_ids, batch.src_node_types)])
-    dst_type_indices = torch.tensor([types_idx[t.item()][d.item()] for d, t in zip(dst_ids, batch.dst_node_types)])
     for edge_type in batch.edge_types.unique():
         edge_mask = batch.edge_types == edge_type
         src_edge_indices = src_type_indices[edge_mask]
@@ -116,6 +102,9 @@ def batch_to_graph(batch: MemoryBatch,
         dst_type = batch.dst_node_types[edge_mask][0].item()
         edge_key = (f'node_{src_type}', f'edge_{edge_type.item()}', f'node_{dst_type}')
         graph[edge_key].edge_index = torch.stack([src_edge_indices, dst_edge_indices])
+
+        # Add relative time encoding as edge attribute
+        graph[edge_key].edge_attr = batch.rel_t_enc[edge_mask].unsqueeze(1)  # Ensure it's 2D
 
     return graph, global_mapping
 

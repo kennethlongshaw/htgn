@@ -12,7 +12,8 @@ from src.training.training_config import Training_Config
 from src.data_loaders.data_loaders import GraphSchema
 
 
-def make_HTGN(train_cfg: Training_Config, schema: GraphSchema):
+def make_HTGN(train_cfg: Training_Config,
+              schema: GraphSchema):
     msg_enc_cfg = HeteroMessageEncoder_Config(
         emb_dim=train_cfg.emb_dim,
         node_dims=schema.node_dims,
@@ -37,9 +38,13 @@ def make_HTGN(train_cfg: Training_Config, schema: GraphSchema):
                                      ),
                 gnn_enc=to_hetero(GAT(in_channels=-1,
                                       hidden_channels=train_cfg.emb_dim,
-                                      num_layers=train_cfg.num_layers
+                                      num_layers=train_cfg.num_layers,
+                                      add_self_loops=False,
+                                      edge_dim=train_cfg.time_dim
                                       ),
                                   metadata=(schema.node_names, schema.edge_names)
                                   ),
                 link_pred=DotProductLinkPredictor(),
+                train_cfg=train_cfg,
+                num_nodes=schema.num_nodes
                 )

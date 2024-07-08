@@ -1,49 +1,88 @@
 import torch.nn as nn
-import polars as pl
 import torch
 from torch import Tensor
-from src.utils.utils import df_to_batch, concat_memory_batches
+from src.utils.utils import concat_memory_batches
 from torch_geometric.utils import scatter
 from torch_geometric.nn.inits import zeros
 from src.nn.protocols import MemoryBatch
-from typing import List
-
-from collections import namedtuple
-
+from typing import List, get_type_hints
+from dataclasses import dataclass, fields
 
 
-class EdgeStore(nn.Module):
-    def __init__(self,
-                 ):
-        super().__init__()
-        self.edge_store = None
-        self.edge_features = []
+@dataclass
+class EdgeStore:
+    time: Tensor = None
+    rel_t: Tensor = None
+    rel_t_enc: Tensor = None
+    src_ids: Tensor = None
+    src_node_types: Tensor = None
+    dst_ids: Tensor = None
+    dst_node_types: Tensor = None
+    edge_types: Tensor = None
+    edge_features: list[Tensor] = None
 
-    def insert_edges(self,
-                     times: Tensor,
-                     src_ids: Tensor,
-                     edge_types: Tensor,
-                     edge_features: List[Tensor],
-                     dst_ids: Tensor):
-        edges = torch.stack([times, src_ids, edge_types, dst_ids])
-        if self.edge_store is None:
-            self.edge_store = edges
-        else:
-            self.edge_store = torch.cat([self.edge_store, edges])
-            self.edge_features += edge_features
 
-    def get_neighbors(self, node_ids: Tensor) -> tuple[Tensor, List[Tensor]]:
-        if self.edge_store is None:
-            return None, []
+    def to(self, device: torch.device) -> 'EdgeStore':
+        """Move the store data to a specified device."""
+        new_kwargs = {}
+        type_hints = get_type_hints(self.__class__)
+        for field in fields(self):
+            value = getattr(self, field.name)
+            field_type = type_hints[field.name]
+            if value is None:
+                new_kwargs[field.name] = None
+            elif isinstance(field_type, list):
+                new_kwargs[field.name] = [v.to(device) for v in value]
+            elif isinstance(field_type, torch.Tensor):
+                new_kwargs[field.name] = value.to(device)
+            else:
+                new_kwargs[field.name] = value
+        return EdgeStore(**new_kwargs)
 
-        # Find indices where dst_ids match
-        mask = torch.isin(self.edge_store[3], node_ids)
+    def get_edges(self, filter_ids, filter_target='dst'):
+        type_hints = get_type_hints(self.__class__)
+        filter_masks = {
+            'src': lambda filter_id: self.src_ids == filter_id,
+            'dst': lambda filter_id: self.dst_ids == filter_id,
+        }
+        if filter_target not in filter_masks:
+            raise Exception(f"Invalid filter target: {filter_target}")
 
-        # Select matching edges
-        selected_edges = self.edge_store[:, mask]
-        selected_features = [feature[mask] for feature in self.edge_features]
+        mask = torch.stack([filter_masks[filter_target](filter_id) for filter_id in filter_ids]).any(dim=0)
 
-        return selected_edges, selected_features
+        new_kwargs = {}
+        for field in fields(self):
+            value = getattr(self, field.name)
+            field_type = type_hints[field.name]
+            if value is None:
+                new_kwargs[field.name] = None
+            elif isinstance(value, list) or field_type == List[torch.Tensor]:
+                new_kwargs[field.name] = [v for v, m in zip(value, mask.tolist()) if m]
+            else:
+                new_kwargs[field.name] = value[mask]
+
+        return EdgeStore(**new_kwargs)
+
+    def append(self, batch: MemoryBatch) -> 'EdgeStore':
+        new_time = batch.time
+        new_src_ids = batch.src_ids
+        new_dst_ids = batch.dst_ids
+        new_edge_types = batch.edge_types
+        new_edge_features = batch.edge_features
+
+        new_kwargs = {}
+        for field in fields(self):
+            current_value = getattr(self, field.name)
+            new_value = locals()[f"new_{field.name}"]
+
+            if isinstance(current_value, torch.Tensor):
+                new_kwargs[field.name] = torch.cat([current_value, new_value])
+            elif isinstance(current_value, list):
+                new_kwargs[field.name] = [torch.cat([curr, new]) for curr, new in zip(current_value, new_value)]
+            else:
+                raise ValueError(f"Unsupported field type for {field.name}")
+
+        return EdgeStore(**new_kwargs)
 
 
 class MemoryStore(nn.Module):
@@ -82,6 +121,8 @@ class MessageStore(nn.Module):
         msgs = [self.msg_store.get(i, None) for i in dst_ids.tolist() if self.msg_store.get(i, None) is not None]
         return concat_memory_batches(msgs)
 
+    def reset_state(self):
+        self.msg_store = {}
 
 class LastUpdateStore(nn.Module):
     def __init__(self,
@@ -102,7 +143,9 @@ class LastUpdateStore(nn.Module):
         self.last_update = torch.maximum(self.last_update, new_update)
 
     @torch.no_grad()
-    def calc_relative_time(self, dst_ids: Tensor, times: Tensor):
+    def calc_relative_time(self,
+                           dst_ids: Tensor,
+                           times: Tensor):
         last_update = self.last_update[dst_ids]
         unique, index = dst_ids.unique(return_inverse=True)
         return last_update[index] - times

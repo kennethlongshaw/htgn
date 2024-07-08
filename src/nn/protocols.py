@@ -5,6 +5,7 @@ from dataclasses import dataclass, fields
 from torch_geometric.data import HeteroData
 from itertools import compress
 
+
 @dataclass(slots=True)
 class MemoryBatch:
     entity_types: Tensor
@@ -102,6 +103,24 @@ class MemoryProtocol(Protocol):
 
 
 class MemoryEncoderProtocol(Protocol):
+    def __init__(self,
+                 message_enc: MessageEncoderProtocol,
+                 aggregator: AggregatorProtocol,
+                 time_enc: TimeEncoderProtocol,
+                 memory_enc: MemoryProtocol
+                 ):
+        # Message computation module
+        self.msg_enc = message_enc
+
+        # Batch agg module
+        self.aggregator = aggregator
+
+        # time encoding
+        self.time_enc = time_enc
+
+        # sequential model
+        self.memory_enc = memory_enc
+
     def __call__(self,
                  batch: MemoryBatch
                  ) -> Tuple[Tensor, Tensor]:
@@ -112,7 +131,7 @@ class GraphEncoderProtocol(Protocol):
     def __call__(self,
                  x_dict: dict[str:Tensor],
                  edge_index_dict: dict[str:Tensor]
-                 ) -> Tensor:
+                 ) -> dict[str:Tensor]:
         pass
 
 
@@ -124,15 +143,11 @@ class OldLinkPredictorProtocol(Protocol):
                  ) -> dict[int: Tensor]:
         pass
 
+
 class LinkPredictorProtocol(Protocol):
     def __call__(self,
                  src: Tensor,
                  dst: Tensor,
-                 edge_labels: Tensor
+                 edge_labels: Optional[Tensor] = None
                  ) -> Tensor:
         pass
-
-class HeteroGraph(Protocol):
-    def __init__(self):
-        HeteroData().__init__()
-

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from src.utils.utils import filter_by_index
 from src.nn.protocols import MemoryBatch
 
+
 class MessageTransformer(nn.Module):
     """
         Implements a transformer block for message cross attention in context of the destination
