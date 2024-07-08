@@ -37,7 +37,6 @@ class MemoryModule(nn.Module):
             # get the first seen copy of each node memory
             mem_idx, _ = torch.unique(index, return_inverse=True)
 
-
         agg = self.aggregator(index=index, values=msg, num_nodes=unique_ids.size(0))
 
         prev_memories = batch.dst_memories[mem_idx]

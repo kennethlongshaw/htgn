@@ -1,5 +1,5 @@
 from src.models.htgn import HTGN
-from src.nn.encoders import (HeteroMessageEncoder_Config,
+from src.nn.encoders import (HeteroMessageEncoderConfig,
                              HeteroMessageEncoder,
                              TimeEncoder,
                              ScatterAggregator
@@ -14,7 +14,7 @@ from src.data_loaders.data_loaders import GraphSchema
 
 def make_HTGN(train_cfg: Training_Config,
               schema: GraphSchema):
-    msg_enc_cfg = HeteroMessageEncoder_Config(
+    msg_enc_cfg = HeteroMessageEncoderConfig(
         emb_dim=train_cfg.emb_dim,
         node_dims=schema.node_dims,
         edge_dims=schema.edge_dims,

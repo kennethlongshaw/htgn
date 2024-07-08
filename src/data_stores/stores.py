@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch
 from torch import Tensor
-from src.utils.utils import concat_memory_batches
+import src.utils.utils as utils
 from torch_geometric.utils import scatter
 from torch_geometric.nn.inits import zeros
 from src.nn.protocols import MemoryBatch
@@ -21,7 +21,6 @@ class EdgeStore:
     edge_types: Tensor = None
     edge_features: list[Tensor] = None
 
-
     def to(self, device: torch.device) -> 'EdgeStore':
         """Move the store data to a specified device."""
         new_kwargs = {}
@@ -39,7 +38,11 @@ class EdgeStore:
                 new_kwargs[field.name] = value
         return EdgeStore(**new_kwargs)
 
-    def get_edges(self, filter_ids, filter_target='dst'):
+    def get_edges(self, filter_ids: Tensor, filter_target='dst'):
+        # If the store is empty or the target field is None, return an empty EdgeStore
+        if getattr(self, f"{filter_target}_ids") is None:
+            return EdgeStore()
+
         type_hints = get_type_hints(self.__class__)
         filter_masks = {
             'src': lambda filter_id: self.src_ids == filter_id,
@@ -47,6 +50,10 @@ class EdgeStore:
         }
         if filter_target not in filter_masks:
             raise Exception(f"Invalid filter target: {filter_target}")
+
+        # Ensure filter_ids is a tensor
+        if not isinstance(filter_ids, torch.Tensor):
+            filter_ids = torch.tensor(filter_ids, device=getattr(self, f"{filter_target}_ids").device)
 
         mask = torch.stack([filter_masks[filter_target](filter_id) for filter_id in filter_ids]).any(dim=0)
 
@@ -57,9 +64,9 @@ class EdgeStore:
             if value is None:
                 new_kwargs[field.name] = None
             elif isinstance(value, list) or field_type == List[torch.Tensor]:
-                new_kwargs[field.name] = [v for v, m in zip(value, mask.tolist()) if m]
+                new_kwargs[field.name] = [v[mask] for v in value] if value else []
             else:
-                new_kwargs[field.name] = value[mask]
+                new_kwargs[field.name] = value[mask] if value is not None else None
 
         return EdgeStore(**new_kwargs)
 
@@ -98,7 +105,7 @@ class MemoryStore(nn.Module):
         return self.memory_store[dst_ids]
 
     @torch.no_grad()
-    def set_memory(self, dst_ids, memory):
+    def set_memory(self, dst_ids: Tensor, memory: Tensor):
         self.memory_store[dst_ids] = memory
 
     def reset_state(self):
@@ -119,10 +126,11 @@ class MessageStore(nn.Module):
     @torch.no_grad()
     def get_from_msg_store(self, dst_ids: Tensor) -> MemoryBatch:
         msgs = [self.msg_store.get(i, None) for i in dst_ids.tolist() if self.msg_store.get(i, None) is not None]
-        return concat_memory_batches(msgs)
+        return utils.concat_memory_batches(msgs)
 
     def reset_state(self):
         self.msg_store = {}
+
 
 class LastUpdateStore(nn.Module):
     def __init__(self,

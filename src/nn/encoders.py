@@ -59,7 +59,7 @@ class MessageTransformer(nn.Module):
 
 
 @dataclass
-class HeteroMessageEncoder_Config:
+class HeteroMessageEncoderConfig:
     emb_dim: int
     node_dims: list[int]
     edge_dims: list[int]
@@ -80,7 +80,7 @@ class HeteroMessageEncoder(pl.LightningModule):
     """
 
     def __init__(self,
-                 cfg: HeteroMessageEncoder_Config
+                 cfg: HeteroMessageEncoderConfig
                  ):
         super().__init__()
 
@@ -128,23 +128,6 @@ class HeteroMessageEncoder(pl.LightningModule):
     def forward(self,
                 batch: MemoryBatch
                 ):
-        """
-        :param rel_t_enc: Tensor of relative time encoding
-        :param action_types: Tensor of int ids for action codes
-        :param entity_types: Tensor of int ids for entity codes
-
-        :param src_node_types: list of ints indicating node type
-        :param src_features: list of ragged tensors dependent on src node type
-        :param src_memories: Tensor of previous memory state for src node
-
-        :param edge_types: list of ints indicating edge type
-        :param edge_features: ragged tensors dependent on edge type
-
-        :param dst_node_types: list of ints indicating node type
-        :param dst_features: list of ragged tensors dependent on dst node type
-        :param dst_memories: Tensor of previous memory state for dst node
-        :return:
-        """
 
         # Learning Embedding
         entity_emb = self.entity_emb_layer(batch.entity_types)
@@ -187,7 +170,7 @@ class HeteroMessageEncoder(pl.LightningModule):
         norm_edge_feature_dict = {}
         edge_features = [(i, f) for i, f in enumerate(batch.edge_features)]
         for type_id in range(len(self.edge_norms)):
-            type_data = filter_by_index(edge_features, batch.edge_types, type_id)
+            type_data = filter_by_index(data=edge_features, index=batch.edge_types, selection=type_id)
             if len(type_data) > 0:
                 og_index = [f[0] for f in type_data]
                 type_features = torch.stack([f[1] for f in type_data])

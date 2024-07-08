@@ -1,6 +1,7 @@
 torch_geometric
 pytorch_lightning
-kuzu
+dvc
+dvclive
 pyarrow
 causal-conv1d
 mamba-ssm

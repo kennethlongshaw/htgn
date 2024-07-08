@@ -49,60 +49,66 @@ class HTGN(lit.LightningModule):
         self.neighbor_batch = None
 
     def on_train_batch_start(self, batch: pr.MemoryBatch, batch_idx: int) -> None:
-        batch_nodes = torch.concat([batch.src_ids, batch.dst_ids, batch.neg_ids]).unique()
+        if batch_idx > 0:
+            batch_nodes = torch.concat([batch.src_ids, batch.dst_ids, batch.neg_ids]).unique()
 
-        # graph data
-        self.graph_data = self.edge_store.get_edges(batch_nodes)
-        self.graph_data.rel_t = self.last_update_store.calc_relative_time(self.graph_data.dst_ids,
-                                                                          self.graph_data.times)
+            # graph data
+            self.graph_data = self.edge_store.get_edges(batch_nodes)
+            self.graph_data.rel_t = self.last_update_store.calc_relative_time(self.graph_data.dst_ids,
+                                                                              self.graph_data.time)
 
-        # data for memory calc
-        all_neighbors = torch.concat([self.graph_data.src_ids, self.graph_data.dst_ids]).unique()
-        self.neighbor_batch = self.msg_store.get_from_msg_store(all_neighbors)
-        self.neighbor_batch.rel_time = self.last_update_store.calc_relative_time(self.neighbor_batch.dst_ids,
-                                                                                 self.neighbor_batch.time
-                                                                                 )
-        self.neighbor_batch.dst_memories = self.mem_store.get_memory(batch.dst_ids)
-        self.neighbor_batch.src_memories = self.mem_store.get_memory(batch.src_ids)
+            # data for memory calc
+            all_neighbors = torch.concat([self.graph_data.src_ids, self.graph_data.dst_ids]).unique()
+            self.neighbor_batch = self.msg_store.get_from_msg_store(all_neighbors)
+            self.neighbor_batch.rel_time = self.last_update_store.calc_relative_time(self.neighbor_batch.dst_ids,
+                                                                                     self.neighbor_batch.time
+                                                                                     )
+            self.neighbor_batch.dst_memories = self.mem_store.get_memory(batch.dst_ids)
+            self.neighbor_batch.src_memories = self.mem_store.get_memory(batch.src_ids)
 
     def on_train_batch_end(self,
                            outputs: STEP_OUTPUT,
                            batch: pr.MemoryBatch,
                            batch_idx: int) -> None:
+        if batch_idx == 0:
+            batch.rel_time = torch.zeros_like(batch.time, dtype=torch.float)
         self.last_update_store.set_last_update(batch.dst_ids, batch.time)
-        self.mem_store.set_memory(dst_ids=batch.dst_ids,
-                                  memory=self.mem_enc(batch))
+        memory_ids, memories = self.mem_enc(batch)
+        self.mem_store.set_memory(dst_ids=memory_ids,
+                                  memory=memories)
         self.msg_store.set_msg_store(batch=batch)
 
-    def training_step(self, batch: pr.MemoryBatch) -> Tensor:
-        self.graph_data.rel_t_enc = self.mem_enc.time_enc(self.graph_data.rel_t)
-        neighbor_mem_ids, neighbor_mem = self.mem_enc(self.neighbor_batch)
+    def training_step(self, batch: pr.MemoryBatch, batch_idx: int) -> Tensor:
+        if batch_idx > 0:
+            self.graph_data.rel_t_enc = self.mem_enc.time_enc(self.graph_data.rel_t)
+            neighbor_mem_ids, neighbor_mem = self.mem_enc(self.neighbor_batch)
 
-        hgraph, mapping = utils.batch_to_graph(self.graph_data,
-                                               memory_ids=neighbor_mem_ids,
-                                               memories=neighbor_mem)
+            hgraph, mapping = utils.batch_to_graph(self.graph_data,
+                                                   memory_ids=neighbor_mem_ids,
+                                                   memories=neighbor_mem)
 
-        z_dict = self.gnn_enc(x_dict=hgraph.x_dict,
-                              edge_index_dict=hgraph.edge_index_dict)
+            z_dict = self.gnn_enc(x_dict=hgraph.x_dict,
+                                  edge_index_dict=hgraph.edge_index_dict)
 
-        src_z = utils.zdict_lookup(mapping=mapping, z_dict=z_dict,
-                                   ids=batch.src_ids, emb_dim=self.train_cfg.emb_dim)
-        pos_dst_z = utils.zdict_lookup(mapping=mapping, z_dict=z_dict,
-                                       ids=batch.dst_ids, emb_dim=self.train_cfg.emb_dim)
-        neg_dst_z = utils.zdict_lookup(mapping=mapping, z_dict=z_dict,
-                                       ids=batch.neg_ids, emb_dim=self.train_cfg.emb_dim)
+            src_z = utils.zdict_lookup(mapping=mapping, z_dict=z_dict,
+                                       ids=batch.src_ids, emb_dim=self.train_cfg.emb_dim)
+            pos_dst_z = utils.zdict_lookup(mapping=mapping, z_dict=z_dict,
+                                           ids=batch.dst_ids, emb_dim=self.train_cfg.emb_dim)
+            neg_dst_z = utils.zdict_lookup(mapping=mapping, z_dict=z_dict,
+                                           ids=batch.neg_ids, emb_dim=self.train_cfg.emb_dim)
+        else:
+            src_z = pos_dst_z = neg_dst_z = torch.zeros(batch.dst_ids.shape[0], self.train_cfg.emb_dim)
 
-        edge_labels = torch.cat([torch.ones_like(pos_dst_z),
-                                 torch.zeros_like(neg_dst_z)
+        edge_labels = torch.cat([torch.ones(pos_dst_z.shape[0]),
+                                 torch.zeros(neg_dst_z.shape[0])
                                  ])
 
         pred = self.link_pred(src=torch.cat([src_z, src_z]),
-                              dst=torch.cat([pos_dst_z, neg_dst_z]),
-                              edge_labels=edge_labels
+                              dst=torch.cat([pos_dst_z, neg_dst_z])
                               )
 
         loss = F.cross_entropy(pred, edge_labels)
-        self.log('train_loss', loss)
+        #self.log('train_loss', loss)
         return loss
 
     def on_predict_batch_start(self, batch: pr.MemoryBatch, batch_idx: int, dataloader_idx: int = 0) -> None:
@@ -115,7 +121,7 @@ class HTGN(lit.LightningModule):
 
     def predict_step(self, batch: pr.MemoryBatch) -> Tensor:
         src_ids, dst_ids = batch.src_ids, batch.dst_ids
-        neighbor_mem_ids, neighbor_mem = self.mem_store.get_memories(src_ids, dst_ids)
+        neighbor_mem_ids, neighbor_mem = self.mem_store.get_memory(src_ids, dst_ids)
 
         hgraph, mapping = utils.batch_to_graph(
             src_ids=src_ids,
