@@ -104,7 +104,7 @@ def batch_to_graph(batch: EdgeStore,
         graph[edge_key].edge_index = torch.stack([src_edge_indices, dst_edge_indices])
 
         # Add relative time encoding as edge attribute
-        graph[edge_key].edge_attr = batch.rel_t_enc[edge_mask].unsqueeze(1)  # Ensure it's 2D
+        graph[edge_key].edge_attr = batch.rel_time_enc[edge_mask].unsqueeze(1)  # Ensure it's 2D
 
     return graph, global_mapping
 
@@ -119,6 +119,9 @@ def df_to_batch(df) -> MemoryBatch:
 
 
 def concat_memory_batches(batches: List[MemoryBatch]) -> MemoryBatch:
+    if not batches:
+        raise ValueError("Cannot concatenate an empty list of batches")
+
     def concat_or_none(tensors: List[Optional[torch.Tensor]]) -> Optional[torch.Tensor]:
         tensors = [t for t in tensors if t is not None]
         return torch.cat(tensors) if tensors else None
@@ -132,21 +135,33 @@ def concat_memory_batches(batches: List[MemoryBatch]) -> MemoryBatch:
     for field in fields(MemoryBatch):
         field_name = field.name
         field_type = type_hints[field_name]
-
         values = [getattr(batch, field_name) for batch in batches]
 
-        if field_type == List[torch.Tensor]:
-            concatenated_data[field_name] = concat_features(values)
-        elif field_type == Optional[torch.Tensor]:
-            if any(isinstance(v, list) for v in values):  # Check if any value is a list
-                concatenated_data[field_name] = concat_features([v for v in values if v is not None])
+        try:
+            if all(v is None for v in values):
+                print(f"Warning: All values for field '{field_name}' are None. Using None as default.")
+                concatenated_data[field_name] = None
+            elif field_type == List[torch.Tensor]:
+                concatenated_data[field_name] = concat_features([v for v in values if v])
+            elif field_type == Optional[torch.Tensor]:
+                if any(isinstance(v, list) for v in values):  # Check if any value is a list
+                    concatenated_data[field_name] = concat_features([v for v in values if v is not None])
+                else:
+                    concatenated_data[field_name] = concat_or_none(values)
+            elif field_type == torch.Tensor:
+                non_empty_values = [v for v in values if v is not None and v.numel() > 0]
+                if non_empty_values:
+                    concatenated_data[field_name] = torch.cat(non_empty_values)
+                else:
+                    print(f"Warning: All tensors for field '{field_name}' are empty or None. Using empty tensor.")
+                    concatenated_data[field_name] = torch.tensor([])
             else:
-                concatenated_data[field_name] = concat_or_none(values)
-        elif field_type == torch.Tensor:
-            concatenated_data[field_name] = torch.cat(values)
-        elif field_type == Optional[List[torch.Tensor]]:
-            concatenated_data[field_name] = concat_features([v for v in values if v is not None])
-        else:
-            concatenated_data[field_name] = values[0]
+                # For non-tensor fields, use the first non-None value
+                non_none_values = [v for v in values if v is not None]
+                concatenated_data[field_name] = non_none_values[0] if non_none_values else None
+        except Exception as e:
+            print(f"Error processing field '{field_name}' of type {field_type}: {str(e)}")
+            print(f"Values: {values}")
+            raise
 
     return MemoryBatch(**concatenated_data)
