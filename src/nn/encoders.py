@@ -146,7 +146,6 @@ class HeteroMessageEncoder(pl.LightningModule):
         for type_id in set(concat_node_types):
             type_data = [feat for node_type, feat in zip(concat_node_types, concat_node_features)
                          if node_type == type_id]
-            #type_data = filter_by_index(concat_node_features, concat_node_types, type_id)
             direction = [f[0] for f in type_data]
             og_index = [f[1] for f in type_data]
             if len(set([f[2].shape[0] for f in type_data])) > 0:

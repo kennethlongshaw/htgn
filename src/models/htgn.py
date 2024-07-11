@@ -156,4 +156,4 @@ class HTGN(lit.LightningModule):
         raise NotImplementedError
 
     def configure_optimizers(self):
-        return torch.optim.AdamW(self.model.parameters(), lr=self.tr_cfg.lr)
+        return torch.optim.AdamW(self.parameters(), lr=self.train_cfg.lr)

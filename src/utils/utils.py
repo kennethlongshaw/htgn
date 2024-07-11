@@ -113,7 +113,7 @@ def df_to_batch(df) -> MemoryBatch:
     non_feature_cols = [col for col in df.columns if 'feature' not in col]
     batch_data = df[non_feature_cols].to_torch(return_type='dict')
     feature_cols = [col for col in df.columns if 'feature' in col]
-    features = {col: df[col].tolist() for col in feature_cols}
+    features = {col: df[col].to_list() for col in feature_cols}
     batch_data.update(features)
     return MemoryBatch(**batch_data)
 
