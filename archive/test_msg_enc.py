@@ -1,4 +1,4 @@
-from src.nn.encoders import HeteroMessageEncoder, HeteroMessageEncoder_Config
+from src.nn.encoders import HeteroMessageEncoder, HeteroMessageEncoderConfig
 from src.nn.protocols import MemoryBatch
 from random import randint, seed
 import torch
@@ -79,7 +79,7 @@ def generate_fake_data(record_cnt,
     src_memories = torch.rand(record_cnt, memory_dim)
     dst_memories = torch.rand(record_cnt, memory_dim)
 
-
+    time = torch.randint(0, record_cnt, (record_cnt,))
     rel_time_enc = torch.rand(record_cnt, time_dim)
 
     schema = {'node_dims': node_dims,
@@ -89,6 +89,7 @@ def generate_fake_data(record_cnt,
 
     records = {'entity_types': entity_types,
                'action_types': action_types,
+               'time': time,
                'rel_time_enc': rel_time_enc,
                'src_node_types': src_node_types,
                'src_features': src_features,
@@ -120,7 +121,7 @@ def test_msg_enc(record_cnt):
     mlp_expansion_factor = 2
     bias = True
 
-    cfg = HeteroMessageEncoder_Config(
+    cfg = HeteroMessageEncoderConfig(
         emb_dim=emb_dim,
         node_dims=schema['node_dims'],
         edge_dims=schema['edge_dims'],

@@ -144,16 +144,18 @@ class HeteroMessageEncoder(pl.LightningModule):
         # norm node features by types and organize into feature dicts
         # this is a bit messy because we are operating on list of ragged tensors
         for type_id in set(concat_node_types):
-            type_data = filter_by_index(concat_node_features, concat_node_types, type_id)
+            type_data = [feat for node_type, feat in zip(concat_node_types, concat_node_features)
+                         if node_type == type_id]
+            #type_data = filter_by_index(concat_node_features, concat_node_types, type_id)
             direction = [f[0] for f in type_data]
             og_index = [f[1] for f in type_data]
-            type_features = torch.stack([f[2] for f in type_data])
-            node_type_emb = self.node_emb_layers(torch.tensor(type_id)).repeat(type_features.shape[0], 1)
-
-            if type_features.numel() > 0:
+            if len(set([f[2].shape[0] for f in type_data])) > 0:
+                type_features = torch.stack([f[2] for f in type_data])
+                node_type_emb = self.node_emb_layers(torch.tensor(type_id)).repeat(type_features.shape[0], 1)
                 type_features = torch.cat([type_features, node_type_emb], dim=1)
             else:
-                type_features = node_type_emb
+                type_features = self.node_emb_layers(torch.tensor(type_id)).repeat(len(type_data), 1)
+                print(type_features)
 
             node_norm_features = self.node_norms[type_id](type_features)
             for node_dir, idx, feat in zip(direction, og_index, node_norm_features):
@@ -169,8 +171,9 @@ class HeteroMessageEncoder(pl.LightningModule):
         # this is a bit messy because we are operating on list of ragged tensors
         norm_edge_feature_dict = {}
         edge_features = [(i, f) for i, f in enumerate(batch.edge_features)]
-        for type_id in range(len(self.edge_norms)):
-            type_data = filter_by_index(data=edge_features, index=batch.edge_types, selection=type_id)
+        for type_id in batch.edge_types.unique().tolist():
+            type_data = [feat for edge_type, feat in zip(batch.edge_types.tolist(), edge_features) if
+                         edge_type == type_id]
             if len(type_data) > 0:
                 og_index = [f[0] for f in type_data]
                 type_features = torch.stack([f[1] for f in type_data])

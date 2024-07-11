@@ -188,7 +188,7 @@ class LastUpdateStore(nn.Module):
                            times: Tensor):
         last_update = self.last_update[dst_ids]
         unique, index = dst_ids.unique(return_inverse=True)
-        return last_update[index] - times
+        return times - last_update[index]
 
     def reset_state(self):
         zeros(self.last_update)

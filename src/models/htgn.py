@@ -69,6 +69,7 @@ class HTGN(lit.LightningModule):
     def training_step(self, batch: pr.MemoryBatch, batch_idx: int) -> Tensor:
         if batch_idx > 0:
             self.graph_data.rel_time_enc = self.mem_enc.time_enc(self.graph_data.rel_time)
+            print(self.neighbor_batch)
             neighbor_mem_ids, neighbor_mem = self.mem_enc(self.neighbor_batch)
 
             hgraph, mapping = utils.batch_to_graph(self.graph_data,
@@ -105,6 +106,7 @@ class HTGN(lit.LightningModule):
                            batch_idx: int) -> None:
         if batch_idx == 0:
             batch.rel_time = torch.zeros_like(batch.time, dtype=torch.float)
+
         self.last_update_store.set_last_update(batch.dst_ids, batch.time)
         memory_ids, memories = self.mem_enc(batch)
         self.mem_store.set_memory(dst_ids=memory_ids,
