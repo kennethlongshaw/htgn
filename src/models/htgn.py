@@ -106,6 +106,8 @@ class HTGN(lit.LightningModule):
                            batch_idx: int) -> None:
         if batch_idx == 0:
             batch.rel_time = torch.zeros_like(batch.time, dtype=torch.float)
+            batch.src_memories = self.mem_store.get_memory(batch.src_ids)
+            batch.dst_memories = self.mem_store.get_memory(batch.dst_ids)
 
         self.last_update_store.set_last_update(batch.dst_ids, batch.time)
         memory_ids, memories = self.mem_enc(batch)

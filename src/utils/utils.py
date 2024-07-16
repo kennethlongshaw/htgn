@@ -111,12 +111,17 @@ def batch_to_graph(batch: EdgeStore,
 
 def df_to_batch(df) -> MemoryBatch:
     non_feature_cols = [col for col in df.columns if 'feature' not in col]
-    batch_data = df[non_feature_cols].to_torch(return_type='dict')
     feature_cols = [col for col in df.columns if 'feature' in col]
     features = {col: df[col].to_list() for col in feature_cols}
-    batch_data.update(features)
-    return MemoryBatch(**batch_data)
 
+    batch_data = df[non_feature_cols].to_torch(return_type='dict')
+    batch_data.update(features)
+    batch = MemoryBatch(**batch_data)
+
+    batch.src_features = [torch.tensor(f) for f in batch.src_features]
+    batch.dst_features = [torch.tensor(f) for f in batch.dst_features]
+    batch.edge_features = [torch.tensor(f) for f in batch.edge_features]
+    return batch
 
 def concat_memory_batches(batches: List[MemoryBatch]) -> MemoryBatch:
     if not batches:
