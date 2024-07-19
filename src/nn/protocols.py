@@ -8,49 +8,59 @@ from itertools import compress
 
 @dataclass(slots=True)
 class MemoryBatch:
+    time: Optional[Tensor]
+
     entity_types: Tensor
+    action_types: Tensor
+
     src_ids: Tensor
     src_node_types: Tensor
     src_features: list[Tensor]
 
     edge_types: Tensor
+    edge_features: [List[Tensor]]
 
     dst_ids: Tensor
     dst_node_types: Tensor
     dst_features: list[Tensor]
 
-    neg_ids: Optional[Tensor] = None
-    action_types: Optional[Tensor] = None
-    edge_features: Optional[Tensor] = None
     src_memories: Optional[Tensor] = None
     dst_memories: Optional[Tensor] = None
-    time: Optional[Tensor] = None
+
     rel_time: Optional[Tensor] = None
     rel_time_enc: Optional[Tensor] = None
 
-    def to(self, device: torch.device) -> 'MemoryBatch':
-        """Move the batch to a specified device."""
-        new_kwargs = {}
-        type_hints = get_type_hints(self.__class__)
-        for field in fields(self):
-            value = getattr(self, field.name)
-            field_type = type_hints[field.name]
-            if value is None:
-                new_kwargs[field.name] = None
-            elif isinstance(field_type, list):
-                new_kwargs[field.name] = [v.to(device) for v in value]
-            elif isinstance(field_type, torch.Tensor):
-                new_kwargs[field.name] = value.to(device)
-            else:
-                new_kwargs[field.name] = value
-        return MemoryBatch(**new_kwargs)
+    def append(self, batch: 'MemoryBatch') -> 'MemoryBatch':
+        return MemoryBatch(
+            time=torch.cat([self.time, batch.time]),
+            entity_types=torch.cat([self.entity_types, batch.entity_types]),
+            action_types=torch.cat([self.action_types, batch.action_types]),
+            src_ids=torch.cat([self.src_ids, batch.src_ids]),
+            src_node_types=torch.cat([self.src_node_types, batch.src_node_types]),
+            src_features=self.src_features + batch.src_features,
+            dst_ids=torch.cat([self.dst_ids, batch.dst_ids]),
+            dst_node_types=torch.cat([self.dst_node_types, batch.dst_node_types]),
+            dst_features=self.dst_features + batch.edge_features,
+            edge_types=torch.cat([self.edge_types, batch.edge_types]),
+            edge_features=self.edge_features + batch.edge_features,
+            src_memories=torch.cat(
+                [self.src_memories, batch.src_memories]) if self.src_memories is not None else batch.src_memories,
+            dst_memories=torch.cat(
+                [self.dst_memories, batch.dst_memories]) if self.dst_memories is not None else batch.dst_memories,
+            rel_time=torch.cat(
+                [self.rel_time, batch.rel_time]) if self.rel_time is not None else batch.rel_time,
+            rel_time_enc=torch.cat(
+                [self.rel_time_enc, batch.rel_time_enc]) if self.rel_time_enc is not None else batch.rel_time_enc,
+        )
+
+    def __add__(self, other):
+        return self.append(other)
 
     def filter_by_ids(self, filter_ids, filter_target='dst'):
         type_hints = get_type_hints(self.__class__)
         filter_masks = {
             'src': lambda filter_id: self.src_ids == filter_id,
             'dst': lambda filter_id: self.dst_ids == filter_id,
-            'neg': lambda filter_id: self.neg_ids == filter_id if self.neg_ids is not None else None
         }
         if filter_target not in filter_masks:
             raise Exception(f"Invalid filter target: {filter_target}")
