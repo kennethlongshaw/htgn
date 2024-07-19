@@ -122,6 +122,3 @@ def df_to_batch(df) -> MemoryBatch:
     batch.dst_features = [torch.tensor(f) for f in batch.dst_features]
     batch.edge_features = [torch.tensor(f) for f in batch.edge_features]
     return batch
-
-def concat_memory_batches(*batches: MemoryBatch) -> MemoryBatch:
-    return sum(batches[1:], start=batches[0])
