@@ -2,8 +2,6 @@ from torch import Tensor, Optional
 import torch
 from typing import Protocol, Tuple, get_type_hints, List
 from dataclasses import dataclass, fields
-from torch_geometric.data import HeteroData
-from itertools import compress
 
 
 @dataclass(slots=True)
